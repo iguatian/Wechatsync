@@ -133,6 +133,7 @@ type MessageAction =
   | { type: 'MCP_DISABLE' }
   | { type: 'MCP_STATUS' }
   | { type: 'MCP_SET_SERVER_URL'; payload: { url: string } }
+  | { type: 'MCP_SET_TOKEN'; payload: { token: string } }
   | { type: 'MCP_WATCH_START' }
   | { type: 'MCP_WATCH_STOP' }
   | { type: 'TRACK_ARTICLE_EXTRACT'; payload: { source: string; success: boolean; hasTitle?: boolean; hasContent?: boolean; hasCover?: boolean; contentLength?: number } }
@@ -649,6 +650,15 @@ async function handleMessage(message: MessageAction, sender?: chrome.runtime.Mes
         mcpClient.resetReconnect()
       }
       return { success: true }
+    }
+
+    case 'MCP_SET_TOKEN': {
+      // 用户可自行配置 token（与服务器 WECHATSYNC_TOKEN 保持一致）
+      const token = (message.payload.token || '').trim()
+      await chrome.storage.local.set({ mcpToken: token })
+      mcpClient.setToken(token)
+      logger.info(' MCP token updated')
+      return { success: true, token }
     }
 
     case 'MCP_WATCH_START': {

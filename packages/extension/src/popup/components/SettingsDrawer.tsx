@@ -28,7 +28,9 @@ export function SettingsDrawer({ open, onClose }: SettingsDrawerProps) {
   const [loading, setLoading] = useState(false)
   const [floatingButtonEnabled, setFloatingButtonEnabled] = useState(false)
   const [serverUrlInput, setServerUrlInput] = useState('')
+  const [tokenInput, setTokenInput] = useState('')
   const serverUrlTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const tokenTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // 获取状态
   useEffect(() => {
@@ -44,6 +46,7 @@ export function SettingsDrawer({ open, onClose }: SettingsDrawerProps) {
           serverUrl: response.serverUrl,
         })
         setServerUrlInput(response.serverUrl || '')
+        setTokenInput(response.token || '')
       }
     })
 
@@ -99,6 +102,10 @@ export function SettingsDrawer({ open, onClose }: SettingsDrawerProps) {
           connected: false,
           token: response.token,  // 保存返回的 token
         }))
+        // 启用时若生成了新 token（此前未配置），同步到输入框
+        if (response.token !== undefined) {
+          setTokenInput(response.token)
+        }
       }
     })
   }
@@ -115,6 +122,22 @@ export function SettingsDrawer({ open, onClose }: SettingsDrawerProps) {
         payload: { url: value.trim() },
       })
       setMcpStatus(prev => ({ ...prev, serverUrl: value.trim() }))
+    }, 800)
+  }
+
+  // Token 变更（防抖 800ms，与服务器 WECHATSYNC_TOKEN 保持一致）
+  const handleTokenChange = (value: string) => {
+    setTokenInput(value)
+    if (tokenTimer.current) {
+      clearTimeout(tokenTimer.current)
+    }
+    tokenTimer.current = setTimeout(() => {
+      const token = value.trim()
+      chrome.runtime.sendMessage({
+        type: 'MCP_SET_TOKEN',
+        payload: { token },
+      })
+      setMcpStatus(prev => ({ ...prev, token }))
     }, 800)
   }
 
@@ -211,12 +234,16 @@ export function SettingsDrawer({ open, onClose }: SettingsDrawerProps) {
                 <p className="text-xs text-muted-foreground">
                   供 CLI 和 MCP Server 通过 WebSocket 桥接同步文章
                 </p>
-                {mcpStatus.token && (
+                {mcpStatus.token !== undefined && (
                   <div className="p-2 bg-muted/50 rounded text-xs">
-                    <p className="text-muted-foreground mb-1">Token:</p>
-                    <code className="block bg-background p-1.5 rounded break-all select-all">
-                      {mcpStatus.token}
-                    </code>
+                    <p className="text-muted-foreground mb-1">Token (与服务器 WECHATSYNC_TOKEN 保持一致):</p>
+                    <input
+                      type="text"
+                      value={tokenInput}
+                      onChange={(e) => handleTokenChange(e.target.value)}
+                      placeholder="请输入服务器 Token"
+                      className="w-full bg-background p-1.5 rounded border border-border text-xs font-mono focus:outline-none focus:ring-1 focus:ring-primary"
+                    />
                   </div>
                 )}
                 <div className="p-2 bg-muted/50 rounded text-xs">
