@@ -28,6 +28,10 @@ export class ExtensionBridge {
   private requestTimeout = 360000 // 6 minutes (图片多时需要更长时间)
   private connectionResolvers = new Map<number, Array<() => void>>()
   private portEnd: number
+  private heartbeatTimer: NodeJS.Timeout | null = null
+  private isAliveFlags = new Map<number, boolean>()
+  private readonly HEARTBEAT_INTERVAL = 25000 // 每 25 秒发送一次心跳（ping）
+  private readonly HEARTBEAT_TIMEOUT = 40000 // 40 秒内未收到 pong 则视为断连
 
   // 安全验证 token（从环境变量读取，优先使用 WECHATSYNC_TOKEN）
   private token: string = process.env.WECHATSYNC_TOKEN || process.env.MCP_TOKEN || ''
@@ -159,6 +163,7 @@ export class ExtensionBridge {
     const ip = (ws._socket && ws._socket.remoteAddress) || 'unknown'
     this.clients.set(wsPort, ws)
     this.clientIps.set(wsPort, ip)
+    this.isAliveFlags.set(wsPort, true)
     if (!this.silent) console.error(`[Bridge] Extension connected on port ${wsPort} (IP: ${ip})`)
 
     // 通知等待连接的 Promise（按端口分组）
@@ -172,15 +177,61 @@ export class ExtensionBridge {
       this.handleMessage(data.toString())
     })
 
+    // 收到协议层 pong 响应，标记连接存活
+    ws.on('pong', () => {
+      this.isAliveFlags.set(wsPort, true)
+    })
+
     ws.on('close', () => {
       if (!this.silent) console.error(`[Bridge] Extension disconnected from port ${wsPort}`)
       this.clients.delete(wsPort)
       this.clientIps.delete(wsPort)
+      this.isAliveFlags.delete(wsPort)
     })
 
     ws.on('error', (error: Error) => {
       if (!this.silent) console.error(`[Bridge] WebSocket error on port ${wsPort}:`, error)
     })
+
+    // 启动全局心跳定时器（所有端口共用，避免重复创建）
+    this.ensureHeartbeat()
+  }
+
+  /**
+   * 确保心跳定时器已启动
+   * 定期发送 ping 帧并检测死连接，防止远程连接被 NAT/防火墙静默断开
+   */
+  private ensureHeartbeat(): void {
+    if (this.heartbeatTimer) return
+
+    this.heartbeatTimer = setInterval(() => {
+      if (this.clients.size === 0) return
+
+      for (const [port, client] of this.clients) {
+        if (client.readyState !== WS_OPEN) continue
+
+        // 检查上一次 pong 是否超时
+        if (this.isAliveFlags.get(port) === false) {
+          if (!this.silent) console.error(`[Bridge] Heartbeat timeout on port ${port}, terminating dead connection`)
+          client.terminate()
+          this.clients.delete(port)
+          this.clientIps.delete(port)
+          this.isAliveFlags.delete(port)
+          continue
+        }
+
+        // 发送 ping，等待 pong
+        this.isAliveFlags.set(port, false)
+        try {
+          client.ping()
+        } catch (e) {
+          if (!this.silent) console.error(`[Bridge] Failed to ping port ${port}:`, e)
+        }
+      }
+    }, this.HEARTBEAT_INTERVAL)
+
+    // 定时器不阻止进程退出
+    if (this.heartbeatTimer.unref) this.heartbeatTimer.unref()
   }
 
   /**
@@ -211,6 +262,8 @@ export class ExtensionBridge {
             wsPort: wsPortToTrack,
             httpPort,
             clientIp: this.clientIps.get(wsPortToTrack) || null,
+            // 诊断信息：token 是否已配置（不暴露 token 本身）
+            tokenConfigured: !!this.token,
           }))
           return
         }
@@ -225,8 +278,18 @@ export class ExtensionBridge {
               res.writeHead(200, { 'Content-Type': 'application/json' })
               res.end(JSON.stringify({ result }))
             } catch (error) {
-              res.writeHead(500, { 'Content-Type': 'application/json' })
-              res.end(JSON.stringify({ error: (error as Error).message }))
+              const message = (error as Error).message
+              // 区分错误类型，返回正确的 HTTP 状态码，便于上层诊断
+              let statusCode = 500
+              if (message.includes('Invalid or missing token') || message.includes('MCP token not configured')) {
+                statusCode = 401
+              } else if (message.includes('Extension not connected')) {
+                statusCode = 503
+              } else if (message.includes('Request timeout')) {
+                statusCode = 504
+              }
+              res.writeHead(statusCode, { 'Content-Type': 'application/json' })
+              res.end(JSON.stringify({ error: message }))
             }
           })
           return
@@ -274,6 +337,12 @@ export class ExtensionBridge {
     this.httpServers.clear()
     this.pendingRequests.clear()
     this.connectionResolvers.clear()
+    this.isAliveFlags.clear()
+    // 清理心跳定时器
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer)
+      this.heartbeatTimer = null
+    }
   }
 
   /**
@@ -560,6 +629,14 @@ export class ExtensionBridge {
       throw new Error(`Extension not connected on port ${wsPort}. Please ensure the Chrome extension is running.`)
     }
 
+    // 服务端未配置 token 时提前报错，避免让扩展返回模糊的 "Invalid or missing token"
+    if (!this.token) {
+      throw new Error(
+        `Token not configured on MCP Server. Please set the WECHATSYNC_TOKEN environment variable and restart the server, ` +
+        `then configure the same token in the Chrome extension settings (扩展设置 -> Token).`
+      )
+    }
+
     const id = this.generateId()
     const message: RequestMessage = {
       id,
@@ -636,7 +713,13 @@ export class ExtensionBridge {
    */
   private handleMessage(data: string): void {
     try {
-      const message: ResponseMessage = JSON.parse(data)
+      const message = JSON.parse(data)
+
+      // 应用层心跳：扩展定期发送 { type: 'ping' } 保活 NAT 映射
+      if (message && message.type === 'ping') {
+        this.sendRawToClients(JSON.stringify({ type: 'pong' }))
+        return
+      }
 
       const pending = this.pendingRequests.get(message.id)
       if (!pending) {
@@ -648,12 +731,36 @@ export class ExtensionBridge {
       this.pendingRequests.delete(message.id)
 
       if (message.error) {
-        pending.reject(new Error(message.error.message))
+        const msg = message.error.message || ''
+        // 将扩展返回的 token 错误改写为更明确的诊断信息
+        if (msg.includes('Invalid or missing token') || msg.includes('MCP token not configured')) {
+          pending.reject(new Error(
+            `Token mismatch: 扩展拒绝了请求。请确认 Chrome 扩展设置中的 Token 与服务器 WECHATSYNC_TOKEN 完全一致 ` +
+            `(服务器 token 已配置: ${this.token ? '是' : '否'})。`
+          ))
+        } else {
+          pending.reject(new Error(msg))
+        }
       } else {
         pending.resolve(message.result)
       }
     } catch (error) {
       console.error('[Bridge] Failed to parse message:', error)
+    }
+  }
+
+  /**
+   * 向所有已连接扩展发送原始消息（仅用于广播心跳响应）
+   */
+  private sendRawToClients(data: string): void {
+    for (const client of this.clients.values()) {
+      if (client && client.readyState === WS_OPEN) {
+        try {
+          client.send(data)
+        } catch (e) {
+          if (!this.silent) console.error('[Bridge] Failed to send heartbeat response:', e)
+        }
+      }
     }
   }
 

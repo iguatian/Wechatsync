@@ -44,7 +44,14 @@ const DEFAULT_SERVER_URL = 'ws://localhost:9527'
 class McpClient {
   private ws: WebSocket | null = null
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null
   private serverUrl = DEFAULT_SERVER_URL
+
+  // 应用层心跳间隔（与服务器 NAT 映射保活配合）
+  private readonly HEARTBEAT_INTERVAL = 20000 // 每 20 秒发送一次 ping
+  // 心跳超时（连续 3 次未收到 pong 判定连接失效）
+  private readonly HEARTBEAT_TIMEOUT = 60000
+  private lastPongAt = 0
 
   // 安全验证 token
   private token: string | null = null
@@ -127,10 +134,13 @@ class McpClient {
         logger.debug('Connected to MCP Server')
         this.reconnectAttempts = 0 // 重置重连计数
         this.lastConnectedAt = Date.now() // 记录连接时间
+        this.lastPongAt = Date.now()
         if (this.reconnectTimer) {
           clearTimeout(this.reconnectTimer)
           this.reconnectTimer = null
         }
+        // 启动应用层心跳保活（防止远程连接被 NAT/防火墙静默断开）
+        this.startHeartbeat()
       }
 
       this.ws.onmessage = (event) => {
@@ -140,6 +150,7 @@ class McpClient {
       this.ws.onclose = (event) => {
         logger.debug(`Disconnected (code: ${event.code}), scheduling reconnect...`)
         this.ws = null
+        this.stopHeartbeat()
         this.scheduleReconnect()
       }
 
@@ -163,6 +174,7 @@ class McpClient {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
     }
+    this.stopHeartbeat()
     if (this.ws) {
       this.ws.onclose = null // 防止触发重连
       this.ws.close()
@@ -175,6 +187,49 @@ class McpClient {
    */
   isConnected(): boolean {
     return this.ws?.readyState === WebSocket.OPEN
+  }
+
+  /**
+   * 启动应用层心跳保活
+   * 每 20 秒发送一次 ping，服务器会回应 pong；
+   * 若长时间未收到 pong，判定连接已失效并主动断开（触发重连）
+   */
+  private startHeartbeat(): void {
+    this.stopHeartbeat()
+
+    this.heartbeatTimer = setInterval(() => {
+      // 连接已关闭则停止
+      if (!this.isConnected()) {
+        this.stopHeartbeat()
+        return
+      }
+
+      // 超过超时阈值未收到 pong，主动断开触发重连
+      if (Date.now() - this.lastPongAt > this.HEARTBEAT_TIMEOUT) {
+        logger.warn('Heartbeat timeout, forcing reconnect')
+        this.ws?.close()
+        return
+      }
+
+      // 发送应用层 ping
+      try {
+        this.ws?.send(JSON.stringify({ type: 'ping' }))
+        logger.debug('Heartbeat ping sent')
+      } catch (e) {
+        logger.error('Failed to send heartbeat:', e)
+        this.ws?.close()
+      }
+    }, this.HEARTBEAT_INTERVAL)
+  }
+
+  /**
+   * 停止心跳定时器
+   */
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer)
+      this.heartbeatTimer = null
+    }
   }
 
   /**
@@ -263,6 +318,21 @@ class McpClient {
   private async handleMessage(data: string): Promise<void> {
     try {
       const message: RequestMessage = JSON.parse(data)
+
+      // 处理服务器心跳响应
+      if ((message as any).type === 'pong') {
+        this.lastPongAt = Date.now()
+        logger.debug('Heartbeat pong received')
+        return
+      }
+
+      // 处理服务器主动发来的应用层心跳（扩展也要响应，作为保活双向流量）
+      if ((message as any).type === 'ping') {
+        this.ws?.send(JSON.stringify({ type: 'pong' }))
+        this.lastPongAt = Date.now()
+        return
+      }
+
       logger.debug('Received:', message.method)
 
       let result: unknown
