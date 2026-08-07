@@ -30,10 +30,15 @@ const WS_PORT_END = process.env.SYNC_PORT_END
   ? parseInt(process.env.SYNC_PORT_END, 10)
   : (process.env.SYNC_WS_PORT ? WS_PORT : 9560) // 设置了 SYNC_WS_PORT 则单端口，否则默认到 9560
 
-// SSE 模式实际使用的端口：多端口模式下跟随起始端口（复用第一个端口对），避免与 ws-bridge 冲突
-// 单端口模式（SYNC_WS_PORT）下沿用原配置
+// SSE 模式实际使用的端口：
+// - 多端口模式：取端口范围之后的下一个端口（WS_PORT_END + 2），
+//   避免与 ExtensionBridge 监听的任一端口对（WS + HTTP）冲突
+// - 单端口模式（SYNC_WS_PORT）：沿用原配置 HTTP_PORT
+// - 可用 SYNC_SSE_HTTP_PORT 环境变量显式指定（默认 9528）
 const SSE_WS_PORT = process.env.SYNC_PORT_START ? WS_PORT_START : WS_PORT
-const SSE_HTTP_PORT = process.env.SYNC_PORT_START ? WS_PORT_START + 1 : HTTP_PORT
+const SSE_HTTP_PORT = process.env.SYNC_SSE_HTTP_PORT
+  ? parseInt(process.env.SYNC_SSE_HTTP_PORT, 10)
+  : (process.env.SYNC_PORT_START ? WS_PORT_END + 2 : HTTP_PORT)
 
 // 检查是否是 SSE 模式
 const isSSEMode = process.argv.includes('--sse')
