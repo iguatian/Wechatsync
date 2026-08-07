@@ -1,3 +1,2 @@
-[submodule "private-adapters"]
-	path = packages/core/src/adapters/platforms/private
-	url = git@github.com:wechatsync/wechatsync-private-adapters.git
+# private-adapters 已移除（官方私有仓库，无权限访问）
+# MCP Server 不需要私有适配器，公开适配器（知乎/掘金/CSDN 等 20+ 平台）已够用
