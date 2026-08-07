@@ -1,9 +1,11 @@
 /**
  * WebSocket Bridge - 与 Chrome Extension 通讯
  *
- * 支持多实例模式：
- * - 第一个实例启动 WebSocket 服务器 + HTTP API
- * - 后续实例通过 HTTP API 转发请求
+ * 支持多端口模式（一个进程监听多个端口对）：
+ * - 每个 WebSocket 端口 +1 = 对应 HTTP API 端口
+ * - HTTP 请求到达哪个 HTTP 端口，就路由到对应的扩展连接
+ * - 例如：扩展连 ws://host:9527，Python 调 http://host:9528/request
+ * - 多个扩展各自连接不同的奇数端口（9527/9529/9531...），互不干扰
  */
 import { WebSocketServer, WebSocket } from 'ws'
 import http from 'http'
@@ -13,9 +15,10 @@ import type { RequestMessage, ResponseMessage } from './types.js'
 const WS_OPEN = WebSocket.OPEN
 
 export class ExtensionBridge {
-  private wss: any = null
-  private httpServer: http.Server | null = null
-  private client: any = null
+  private wsServers: Map<number, WebSocketServer> = new Map()
+  private httpServers: Map<number, http.Server> = new Map()
+  private clients: Map<number, any> = new Map()
+  private clientIps: Map<number, string> = new Map()
   private isServerMode = false
   private pendingRequests = new Map<string, {
     resolve: (value: unknown) => void
@@ -23,7 +26,8 @@ export class ExtensionBridge {
     timeout: NodeJS.Timeout
   }>()
   private requestTimeout = 360000 // 6 minutes (图片多时需要更长时间)
-  private connectionResolvers: Array<() => void> = []
+  private connectionResolvers = new Map<number, Array<() => void>>()
+  private portEnd: number
 
   // 安全验证 token（从环境变量读取，优先使用 WECHATSYNC_TOKEN）
   private token: string = process.env.WECHATSYNC_TOKEN || process.env.MCP_TOKEN || ''
@@ -31,8 +35,27 @@ export class ExtensionBridge {
   // 是否静默模式（CLI 使用时不输出日志）
   private silent: boolean = false
 
-  constructor(private port: number = 9527, options?: { silent?: boolean }) {
+  /**
+   * @param portStart 起始 WebSocket 端口（自动调整为奇数）
+   * @param portEnd   结束 WebSocket 端口（可省略，省略则为单端口模式）
+   * @param options   可选参数
+   */
+  constructor(private portStart: number = 9527, portEnd?: number, options?: { silent?: boolean }) {
+    // 兼容旧调用：new ExtensionBridge(9527, { silent: true })
+    if (typeof portEnd === 'object' && portEnd !== null) {
+      options = portEnd as { silent?: boolean }
+      portEnd = undefined
+    }
     this.silent = options?.silent ?? false
+
+    this.portEnd = (portEnd === undefined || portEnd < portStart) ? portStart : portEnd
+
+    // 确保从奇数端口开始（HTTP = WS + 1，偶数 WS 会与其它实例的 HTTP 冲突）
+    if (this.portStart % 2 === 0) {
+      this.portStart += 1
+    }
+    this.portEnd = (this.portEnd % 2 === 0) ? this.portEnd - 1 : this.portEnd
+
     if (!this.silent) {
       if (this.token) {
         console.error('[Bridge] Token authentication enabled')
@@ -43,64 +66,84 @@ export class ExtensionBridge {
   }
 
   /**
-   * 启动服务 - 自动选择服务器模式或客户端模式
+   * 获取要监听的 WebSocket 端口列表（奇数端口）
+   */
+  getWsPorts(): number[] {
+    const ports: number[] = []
+    for (let p = this.portStart; p <= this.portEnd; p += 2) {
+      ports.push(p)
+    }
+    return ports
+  }
+
+  /**
+   * 启动服务 - 单端口走主/从切换逻辑，多端口全部监听
    */
   async start(): Promise<void> {
-    try {
-      await this.startServer()
-      this.isServerMode = true
-      if (!this.silent) console.error(`[Bridge] Running as PRIMARY (WebSocket: ${this.port}, HTTP: ${this.port + 1})`)
-    } catch (error: unknown) {
-      if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE') {
-        this.isServerMode = false
-        if (!this.silent) console.error(`[Bridge] Running as SECONDARY (forwarding to localhost:${this.port + 1})`)
-      } else {
-        throw error
+    const wsPorts = this.getWsPorts()
+
+    if (wsPorts.length <= 1) {
+      // 单端口模式：保留原有主/从切换逻辑
+      try {
+        await this.listenPort(this.portStart)
+        this.isServerMode = true
+        if (!this.silent) console.error(`[Bridge] Running as PRIMARY (WebSocket: ${this.portStart}, HTTP: ${this.portStart + 1})`)
+      } catch (error: unknown) {
+        if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE') {
+          this.isServerMode = false
+          if (!this.silent) console.error(`[Bridge] Running as SECONDARY (forwarding to localhost:${this.portStart + 1})`)
+        } else {
+          throw error
+        }
       }
+      return
+    }
+
+    // 多端口模式：遍历监听所有奇数端口
+    for (const wsPort of wsPorts) {
+      try {
+        await this.listenPort(wsPort)
+      } catch (error: unknown) {
+        const code = (error as NodeJS.ErrnoException).code
+        if (code === 'EADDRINUSE') {
+          this.closePort(wsPort)
+          if (!this.silent) console.error(`[Bridge] Port ${wsPort} in use, skipping`)
+        } else {
+          throw error
+        }
+      }
+    }
+
+    if (this.httpServers.size > 0) {
+      this.isServerMode = true
+      if (!this.silent) {
+        console.error(`[Bridge] Running as PRIMARY with ${this.httpServers.size} port pairs (${this.getWsPorts().join(', ')})`)
+      }
+    } else {
+      this.isServerMode = false
+      if (!this.silent) console.error(`[Bridge] All ports in use, running as SECONDARY`)
     }
   }
 
   /**
-   * 启动 WebSocket 服务器 + HTTP API
+   * 监听单个端口对（WebSocket 端口 + HTTP 端口）
    */
-  private startServer(): Promise<void> {
+  private listenPort(wsPort: number): Promise<void> {
     return new Promise((resolve, reject) => {
       try {
-        this.wss = new WebSocketServer({ port: this.port })
+        const wss = new WebSocketServer({ port: wsPort })
+        this.wsServers.set(wsPort, wss)
 
-        this.wss.on('listening', () => {
-          if (!this.silent) console.error(`[Bridge] WebSocket server listening on port ${this.port}`)
-          // WebSocket 启动成功后，启动 HTTP API
-          this.startHttpApi()
-            .then(resolve)
-            .catch(reject)
+        wss.on('listening', () => {
+          if (!this.silent) console.error(`[Bridge] WebSocket server listening on port ${wsPort}`)
+          this.startHttpApi(wsPort).then(resolve).catch(reject)
         })
 
-        this.wss.on('connection', (ws: any) => {
-          if (!this.silent) console.error('[Bridge] Extension connected')
-          this.client = ws
-
-          // 通知等待连接的 Promise
-          for (const resolver of this.connectionResolvers) {
-            resolver()
-          }
-          this.connectionResolvers = []
-
-          ws.on('message', (data: any) => {
-            this.handleMessage(data.toString())
-          })
-
-          ws.on('close', () => {
-            if (!this.silent) console.error('[Bridge] Extension disconnected')
-            this.client = null
-          })
-
-          ws.on('error', (error: Error) => {
-            if (!this.silent) console.error('[Bridge] WebSocket error:', error)
-          })
+        wss.on('connection', (ws: any) => {
+          this.onConnection(wsPort, ws)
         })
 
-        this.wss.on('error', (error: Error) => {
+        wss.on('error', (error: Error) => {
           reject(error)
         })
       } catch (error) {
@@ -110,11 +153,45 @@ export class ExtensionBridge {
   }
 
   /**
-   * 启动 HTTP API 服务器（供其他 MCP 实例调用）
+   * 处理扩展连接（记录 IP，按端口维护 client）
    */
-  private startHttpApi(): Promise<void> {
+  private onConnection(wsPort: number, ws: any): void {
+    const ip = (ws._socket && ws._socket.remoteAddress) || 'unknown'
+    this.clients.set(wsPort, ws)
+    this.clientIps.set(wsPort, ip)
+    if (!this.silent) console.error(`[Bridge] Extension connected on port ${wsPort} (IP: ${ip})`)
+
+    // 通知等待连接的 Promise（按端口分组）
+    const resolvers = this.connectionResolvers.get(wsPort) || []
+    for (const resolver of resolvers) {
+      resolver()
+    }
+    this.connectionResolvers.delete(wsPort)
+
+    ws.on('message', (data: any) => {
+      this.handleMessage(data.toString())
+    })
+
+    ws.on('close', () => {
+      if (!this.silent) console.error(`[Bridge] Extension disconnected from port ${wsPort}`)
+      this.clients.delete(wsPort)
+      this.clientIps.delete(wsPort)
+    })
+
+    ws.on('error', (error: Error) => {
+      if (!this.silent) console.error(`[Bridge] WebSocket error on port ${wsPort}:`, error)
+    })
+  }
+
+  /**
+   * 启动该端口对的 HTTP API 服务器（HTTP 端口 = WS 端口 + 1）
+   * 请求到达哪个 HTTP 端口，就路由到对应的扩展连接
+   */
+  private startHttpApi(wsPortToTrack: number): Promise<void> {
     return new Promise((resolve, reject) => {
-      this.httpServer = http.createServer(async (req, res) => {
+      const httpPort = wsPortToTrack + 1
+
+      const server = http.createServer(async (req, res) => {
         // CORS headers
         res.setHeader('Access-Control-Allow-Origin', '*')
         res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
@@ -129,8 +206,11 @@ export class ExtensionBridge {
         if (req.method === 'GET' && req.url === '/status') {
           res.writeHead(200, { 'Content-Type': 'application/json' })
           res.end(JSON.stringify({
-            connected: this.isConnected(),
-            mode: 'primary'
+            connected: this.isConnected(wsPortToTrack),
+            mode: 'primary',
+            wsPort: wsPortToTrack,
+            httpPort,
+            clientIp: this.clientIps.get(wsPortToTrack) || null,
           }))
           return
         }
@@ -141,7 +221,7 @@ export class ExtensionBridge {
           req.on('end', async () => {
             try {
               const { method, params } = JSON.parse(body)
-              const result = await this.requestInternal(method, params)
+              const result = await this.requestInternal(wsPortToTrack, method, params)
               res.writeHead(200, { 'Content-Type': 'application/json' })
               res.end(JSON.stringify({ result }))
             } catch (error) {
@@ -156,33 +236,46 @@ export class ExtensionBridge {
         res.end('Not found')
       })
 
-      const httpPort = this.port + 1
-      this.httpServer.listen(httpPort, () => {
+      this.httpServers.set(httpPort, server)
+      server.on('error', reject)
+      server.listen(httpPort, () => {
         if (!this.silent) console.error(`[Bridge] HTTP API listening on port ${httpPort}`)
         resolve()
       })
-
-      this.httpServer.on('error', reject)
     })
   }
 
   /**
-   * 停止服务器
+   * 关闭指定端口对
    */
-  stop(): void {
-    if (this.wss) {
-      this.wss.close()
-      this.wss = null
+  closePort(wsPort: number): void {
+    const wss = this.wsServers.get(wsPort)
+    if (wss) {
+      wss.close()
+      this.wsServers.delete(wsPort)
     }
-    if (this.httpServer) {
-      this.httpServer.close()
-      this.httpServer = null
+    const httpServer = this.httpServers.get(wsPort + 1)
+    if (httpServer) {
+      httpServer.close()
+      this.httpServers.delete(wsPort + 1)
     }
+    this.clients.delete(wsPort)
+    this.clientIps.delete(wsPort)
   }
 
   /**
-   * 检查 Extension 是否已连接
+   * 停止所有服务器
    */
+  stop(): void {
+    for (const wsPort of [...this.wsServers.keys()]) {
+      this.closePort(wsPort)
+    }
+    this.wsServers.clear()
+    this.httpServers.clear()
+    this.pendingRequests.clear()
+    this.connectionResolvers.clear()
+  }
+
   /**
    * 获取当前运行模式
    */
@@ -191,40 +284,76 @@ export class ExtensionBridge {
   }
 
   /**
-   * 检查 Extension 是否已连接
+   * 检查 Extension 是否已连接（指定端口或任一端口）
    */
-  isConnected(): boolean {
-    if (this.isServerMode) {
-      return this.client !== null && this.client.readyState === WS_OPEN
-    } else {
-      // SECONDARY 模式：无法同步检查，需要用 checkPrimaryHealth 异步验证
-      return false
+  isConnected(wsPort?: number): boolean {
+    if (!this.isServerMode) return false
+    if (wsPort !== undefined) {
+      const client = this.clients.get(wsPort)
+      return !!client && client.readyState === WS_OPEN
     }
+    for (const client of this.clients.values()) {
+      if (client && client.readyState === WS_OPEN) return true
+    }
+    return false
   }
 
   /**
-   * 等待 Extension 连接
+   * 获取第一个有扩展连接的端口
    */
-  waitForConnection(timeoutMs: number = 60000): Promise<void> {
+  getActiveWsPort(): number | null {
+    for (const [port, client] of this.clients) {
+      if (client && client.readyState === WS_OPEN) return port
+    }
+    return null
+  }
+
+  /**
+   * 获取所有有扩展连接的端口
+   */
+  getActiveWsPorts(): number[] {
+    const ports: number[] = []
+    for (const [port, client] of this.clients) {
+      if (client && client.readyState === WS_OPEN) ports.push(port)
+    }
+    return ports.sort((a, b) => a - b)
+  }
+
+  /**
+   * 获取指定端口扩展的 IP
+   */
+  getClientIp(wsPort: number): string | null {
+    return this.clientIps.get(wsPort) || null
+  }
+
+  /**
+   * 等待 Extension 连接（可指定端口，默认任一）
+   */
+  waitForConnection(timeoutMs: number = 60000, wsPort?: number): Promise<void> {
     if (this.isServerMode) {
       // PRIMARY 模式：等待扩展 WebSocket 连接
-      if (this.client !== null && this.client.readyState === WS_OPEN) {
+      const targetPort = wsPort ?? this.portStart
+      if (this.isConnected(targetPort)) {
         return Promise.resolve()
       }
 
       return new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {
-          const index = this.connectionResolvers.indexOf(resolve)
+          const resolvers = this.connectionResolvers.get(targetPort) || []
+          const index = resolvers.indexOf(resolve)
           if (index > -1) {
-            this.connectionResolvers.splice(index, 1)
+            resolvers.splice(index, 1)
+            this.connectionResolvers.set(targetPort, resolvers)
           }
           reject(new Error('timeout'))
         }, timeoutMs)
 
-        this.connectionResolvers.push(() => {
+        const resolvers = this.connectionResolvers.get(targetPort) || []
+        resolvers.push(() => {
           clearTimeout(timeout)
           resolve()
         })
+        this.connectionResolvers.set(targetPort, resolvers)
       })
     } else {
       // SECONDARY 模式：轮询 PRIMARY 健康状态，PRIMARY 消失则尝试接管
@@ -262,21 +391,27 @@ export class ExtensionBridge {
                 return
               }
 
-              if (this.client && this.client.readyState === WS_OPEN) {
+              if (this.isConnected(this.portStart)) {
                 resolve()
                 return
               }
 
               const promoteTimeout = setTimeout(() => {
-                const index = this.connectionResolvers.indexOf(resolve)
-                if (index > -1) this.connectionResolvers.splice(index, 1)
+                const resolvers = this.connectionResolvers.get(this.portStart) || []
+                const index = resolvers.indexOf(resolve)
+                if (index > -1) {
+                  resolvers.splice(index, 1)
+                  this.connectionResolvers.set(this.portStart, resolvers)
+                }
                 reject(new Error('timeout:no_extension'))
               }, remaining)
 
-              this.connectionResolvers.push(() => {
+              const resolvers = this.connectionResolvers.get(this.portStart) || []
+              resolvers.push(() => {
                 clearTimeout(promoteTimeout)
                 resolve()
               })
+              this.connectionResolvers.set(this.portStart, resolvers)
               return
             }
             // 接管失败，继续轮询
@@ -300,7 +435,7 @@ export class ExtensionBridge {
     return new Promise((resolve) => {
       const options = {
         hostname: 'localhost',
-        port: this.port + 1,
+        port: this.portStart + 1,
         path: '/status',
         method: 'GET',
         timeout: 3000,
@@ -334,10 +469,12 @@ export class ExtensionBridge {
 
   /**
    * 发送请求到 Extension 并等待响应
+   * @param wsPort 指定端口（可省略，省略时用第一个活跃端口）
    */
-  async request<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T> {
+  async request<T = unknown>(method: string, params?: Record<string, unknown>, wsPort?: number): Promise<T> {
     if (this.isServerMode) {
-      return this.requestInternal<T>(method, params)
+      const port = wsPort ?? this.getActiveWsPort() ?? this.portStart
+      return this.requestInternal<T>(port, method, params)
     } else {
       return this.requestViaSecondary<T>(method, params)
     }
@@ -356,7 +493,7 @@ export class ExtensionBridge {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       // 如果已经升级为 PRIMARY，直接走 internal
       if (this.isServerMode) {
-        return this.requestInternal<T>(method, params)
+        return this.requestInternal<T>(this.portStart, method, params)
       }
 
       // 重试前等待（首次不等）
@@ -375,11 +512,11 @@ export class ExtensionBridge {
           const promoted = await this.tryPromote()
           if (promoted) {
             // 等 Extension 重新连接（温热重连应该很快）
-            if (!this.client || this.client.readyState !== WS_OPEN) {
+            if (!this.isConnected(this.portStart)) {
               if (!this.silent) console.error('[Bridge] Waiting for Extension to reconnect...')
-              await this.waitForConnection(30000)
+              await this.waitForConnection(30000, this.portStart)
             }
-            return this.requestInternal<T>(method, params)
+            return this.requestInternal<T>(this.portStart, method, params)
           }
         }
         lastError = new Error(health.error || 'Primary instance not available.')
@@ -403,9 +540,9 @@ export class ExtensionBridge {
   private async tryPromote(): Promise<boolean> {
     for (let i = 0; i < 5; i++) {
       try {
-        await this.startServer()
+        await this.listenPort(this.portStart)
         this.isServerMode = true
-        if (!this.silent) console.error(`[Bridge] Promoted to PRIMARY (WebSocket: ${this.port}, HTTP: ${this.port + 1})`)
+        if (!this.silent) console.error(`[Bridge] Promoted to PRIMARY (WebSocket: ${this.portStart}, HTTP: ${this.portStart + 1})`)
         return true
       } catch {
         await new Promise(r => setTimeout(r, 1000))
@@ -415,11 +552,12 @@ export class ExtensionBridge {
   }
 
   /**
-   * 直接通过 WebSocket 发送请求（服务器模式）
+   * 直接通过 WebSocket 发送请求（服务器模式，指定端口）
    */
-  private async requestInternal<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T> {
-    if (!this.client || this.client.readyState !== WS_OPEN) {
-      throw new Error('Extension not connected. Please ensure the Chrome extension is running.')
+  private async requestInternal<T = unknown>(wsPort: number, method: string, params?: Record<string, unknown>): Promise<T> {
+    const client = this.clients.get(wsPort)
+    if (!client || client.readyState !== WS_OPEN) {
+      throw new Error(`Extension not connected on port ${wsPort}. Please ensure the Chrome extension is running.`)
     }
 
     const id = this.generateId()
@@ -438,7 +576,7 @@ export class ExtensionBridge {
 
       this.pendingRequests.set(id, { resolve: resolve as (value: unknown) => void, reject, timeout })
 
-      this.client!.send(JSON.stringify(message))
+      client.send(JSON.stringify(message))
     })
   }
 
@@ -450,7 +588,7 @@ export class ExtensionBridge {
       const data = JSON.stringify({ method, params })
       const options = {
         hostname: 'localhost',
-        port: this.port + 1,
+        port: this.portStart + 1,
         path: '/request',
         method: 'POST',
         headers: {

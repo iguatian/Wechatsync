@@ -19,14 +19,22 @@ import path from 'path'
 import { ExtensionBridge } from './ws-bridge.js'
 import type { PlatformInfo, SyncResult } from './types.js'
 
+// 端口配置：
+// - 旧配置 SYNC_WS_PORT=9527：单端口模式（兼容原版）
+// - 新配置 SYNC_PORT_START / SYNC_PORT_END：多端口模式（一个进程监听多个端口对）
+// - 默认：多端口模式 9527~9560
 const WS_PORT = parseInt(process.env.SYNC_WS_PORT || '9527', 10)
 const HTTP_PORT = parseInt(process.env.SYNC_HTTP_PORT || '9528', 10)
+const WS_PORT_START = parseInt(process.env.SYNC_PORT_START || process.env.SYNC_WS_PORT || '9527', 10)
+const WS_PORT_END = process.env.SYNC_PORT_END
+  ? parseInt(process.env.SYNC_PORT_END, 10)
+  : (process.env.SYNC_WS_PORT ? WS_PORT : 9560) // 设置了 SYNC_WS_PORT 则单端口，否则默认到 9560
 
 // 检查是否是 SSE 模式
 const isSSEMode = process.argv.includes('--sse')
 
-// Extension WebSocket 桥接
-const bridge = new ExtensionBridge(WS_PORT)
+// Extension WebSocket 桥接（多端口模式下监听所有奇数端口）
+const bridge = new ExtensionBridge(WS_PORT_START, WS_PORT_END)
 
 /**
  * 创建 MCP Server
