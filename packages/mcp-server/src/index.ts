@@ -30,6 +30,11 @@ const WS_PORT_END = process.env.SYNC_PORT_END
   ? parseInt(process.env.SYNC_PORT_END, 10)
   : (process.env.SYNC_WS_PORT ? WS_PORT : 9560) // 设置了 SYNC_WS_PORT 则单端口，否则默认到 9560
 
+// SSE 模式实际使用的端口：多端口模式下跟随起始端口（复用第一个端口对），避免与 ws-bridge 冲突
+// 单端口模式（SYNC_WS_PORT）下沿用原配置
+const SSE_WS_PORT = process.env.SYNC_PORT_START ? WS_PORT_START : WS_PORT
+const SSE_HTTP_PORT = process.env.SYNC_PORT_START ? WS_PORT_START + 1 : HTTP_PORT
+
 // 检查是否是 SSE 模式
 const isSSEMode = process.argv.includes('--sse')
 
@@ -323,11 +328,11 @@ async function startSSEMode() {
     })
   })
 
-  app.listen(HTTP_PORT, () => {
+  app.listen(SSE_HTTP_PORT, () => {
     console.error('[MCP] Sync Assistant started (SSE mode)')
-    console.error(`[MCP] HTTP Server: http://localhost:${HTTP_PORT}`)
-    console.error(`[MCP] Claude Code: http://localhost:${HTTP_PORT}/sse`)
-    console.error(`[MCP] Extension WebSocket: ws://localhost:${WS_PORT}`)
+    console.error(`[MCP] HTTP Server: http://localhost:${SSE_HTTP_PORT}`)
+    console.error(`[MCP] Claude Code: http://localhost:${SSE_HTTP_PORT}/sse`)
+    console.error(`[MCP] Extension WebSocket: ws://localhost:${SSE_WS_PORT}`)
   })
 }
 
