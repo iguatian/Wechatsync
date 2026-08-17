@@ -147,26 +147,10 @@ export class ZhihuAdapter extends CodeAdapter {
         }
       )
 
-            // 3.5 上传封面图（仅当有 cover 时）
-      let coverUrl = ''
-      let coverError = ''
-      if (article.cover) {
-        try {
-          const coverResult = await this.uploadImageByUrl(article.cover)
-          coverUrl = coverResult.url
-          logger.debug('Cover uploaded:', coverUrl)
-        } catch (e) {
-          coverError = (e as Error).message
-          logger.warn('Failed to upload cover:', e)
-        }
-      }
-
       // 4. 知乎特定的内容转换
-// 4. 知乎特定的内容转换
       content = this.transformContent(content)
 
       // 5. 更新草稿内容
-      // 知乎封面字段是 titleImage（不是 image_url），且需带 isTitleImageFullScreen: false
       const updateResponse = await this.runtime.fetch(
         `https://zhuanlan.zhihu.com/api/articles/${draftId}/draft`,
         {
@@ -179,9 +163,6 @@ export class ZhihuAdapter extends CodeAdapter {
           body: JSON.stringify({
             title: article.title,
             content: content,
-            ...(coverUrl
-              ? { titleImage: coverUrl, isTitleImageFullScreen: false }
-              : {}),
           }),
         }
       )
@@ -197,23 +178,10 @@ export class ZhihuAdapter extends CodeAdapter {
 
       const draftUrl = `https://zhuanlan.zhihu.com/p/${draftId}/edit`
 
-      // 封面图诊断信息：通过 MCP 全链路透传到上层发布方（publisher.py），
-      // 便于直接看到封面图上传成功与否及其原因，无需再查扩展控制台。
-      const coverDiagnostics = {
-        coverUploaded: !!coverUrl,
-        coverUrl: coverUrl || undefined,
-        coverError: coverError || undefined,
-      }
-      // 若封面上传失败，同时把失败原因附到 error 上便于直接展示
-      const extra = coverError
-        ? { error: `封面图上传失败: ${coverError}`, ...coverDiagnostics }
-        : coverDiagnostics
-
       return this.createResult(true, {
         postId: draftId,
         postUrl: draftUrl,
         draftOnly: options?.draftOnly ?? true,
-        ...extra,
       })
     }).catch((error) => this.createResult(false, {
       error: (error as Error).message,
@@ -316,47 +284,37 @@ export class ZhihuAdapter extends CodeAdapter {
   /**
    * 通过 URL 上传图片
    * 支持远程 URL 和 data URI
-   *
-   * 统一采用「扩展下载图片 → 二进制上传」模式（与搜狐号一致）：
-   * 原先对远程 URL 是把 URL 转交给知乎服务端（/api/uploaded_images），
-   * 由知乎服务端去下载外站图片。但知乎服务端访问外部域名
-   * （如 article.iguatian.com）常因网络/防盗链/编码等问题下载失败，
-   * 导致封面图上传失败。改为扩展内下载后走二进制上传（uploadImageBinaryInternal），
-   * 与正文图片的上传链路一致，更稳定可靠。
    */
   protected async uploadImageByUrl(src: string): Promise<ImageUploadResult> {
-    // 对 URL 路径中的非 ASCII 字符（如中文）进行百分号编码，确保扩展能正确下载
-    const encodedSrc = this.encodeUrlPath(src)
-
-    // 扩展内下载图片（host_permissions 允许跨域）
-    logger.debug('Downloading image by URL:', src)
-    const imageResponse = await fetch(encodedSrc)
-    if (!imageResponse.ok) {
-      throw new Error(`图片下载失败: ${src} (HTTP ${imageResponse.status})`)
+    // 检测 data URI，使用二进制上传
+    if (src.startsWith('data:')) {
+      logger.debug('Detected data URI, using binary upload')
+      const blob = await fetch(src).then(r => r.blob())
+      const url = await this.uploadImageBinaryInternal(blob)
+      return { url }
     }
-    // 用 arrayBuffer + 手动推断 MIME，避免 blob.type 为空导致 OSS 签名 Content-Type 错误
-    const arrayBuffer = await imageResponse.arrayBuffer()
-    let mimeType = imageResponse.headers.get('content-type') || ''
-    if (!mimeType || mimeType === 'application/octet-stream') {
-      // 从 URL 扩展名推断
-      const extMatch = src.match(/\.(jpe?g|png|gif|webp|bmp)(\?|$)/i)
-      if (extMatch) {
-        const ext = extMatch[1].toLowerCase()
-        mimeType = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg'
-          : ext === 'png' ? 'image/png'
-          : ext === 'gif' ? 'image/gif'
-          : ext === 'webp' ? 'image/webp'
-          : 'image/bmp'
-      } else {
-        mimeType = 'image/jpeg'
-      }
-    }
-    const blob = new Blob([arrayBuffer], { type: mimeType })
 
-    // 二进制上传到知乎（走 OSS 签名链路，与正文图片一致）
-    logger.debug('Uploading blob via binary upload, type:', blob.type, 'size:', blob.size)
-    const url = await this.uploadImageBinaryInternal(blob)
-    return { url }
+    // 远程 URL 使用知乎 URL 上传 API
+    const response = await this.runtime.fetch('https://zhuanlan.zhihu.com/api/uploaded_images', {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'x-requested-with': 'fetch',
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        url: src,
+        source: 'article',
+      }),
+    })
+
+    const data = await response.json() as { src?: string; hash?: string }
+
+    if (data.src) {
+      return { url: data.src }
+    }
+
+    throw new Error('图片上传失败')
   }
 
   /**

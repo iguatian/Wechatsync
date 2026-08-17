@@ -29,17 +29,29 @@ export class WoshipmAdapter extends CodeAdapter {
   private readonly HEADER_RULES = [
     {
       urlFilter: '*://woshipm.com/wp-admin/admin-ajax.php*',
-      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      headers: {
+        'X-Requested-With': 'XMLHttpRequest',
+        'Origin': 'https://www.woshipm.com',
+        'Referer': 'https://www.woshipm.com/writing',
+      },
       resourceTypes: ['xmlhttprequest'],
     },
     {
       urlFilter: '*://woshipm.com/api2/*',
-      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      headers: {
+        'X-Requested-With': 'XMLHttpRequest',
+        'Origin': 'https://www.woshipm.com',
+        'Referer': 'https://www.woshipm.com/writing',
+      },
       resourceTypes: ['xmlhttprequest'],
     },
     {
       urlFilter: '*://woshipm.com/tensorflow/upyun/upload*',
-      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      headers: {
+        'X-Requested-With': 'XMLHttpRequest',
+        'Origin': 'https://www.woshipm.com',
+        'Referer': 'https://www.woshipm.com/writing',
+      },
       resourceTypes: ['xmlhttprequest'],
     },
   ]
@@ -112,11 +124,28 @@ export class WoshipmAdapter extends CodeAdapter {
     return this.withHeaderRules(this.HEADER_RULES, async () => {
       logger.info('Starting publish...')
 
-      // 1. 使用预处理好的 HTML（Content Script 已处理代码块、图片、特殊标签等）
+      // 1. 先访问 /writing 页面建立登录态并尽力获取 jltoken
+      // （与官方一致：访问页面建立会话即可，不强制 checkAuth 通过）
+      try {
+        const pageResponse = await this.runtime.fetch('https://www.woshipm.com/writing', {
+          method: 'GET',
+          credentials: 'include',
+        })
+        const pageText = await pageResponse.text()
+        const jltokenMatch = pageText.match(/"jltoken"\s*:\s*"([^"]+)"/)
+        if (jltokenMatch) {
+          this.jltoken = jltokenMatch[1]
+          logger.debug('Found jltoken')
+        }
+      } catch (error) {
+        logger.warn('Failed to access writing page:', error)
+      }
+
+      // 2. 使用预处理好的 HTML（Content Script 已处理代码块、图片、特殊标签等）
       // 人人都是产品经理使用 HTML 格式
       let content = article.html || ''
 
-      // 2. 处理图片
+      // 3. 处理图片
       content = await this.processImages(
         content,
         (src) => this.uploadImageByUrl(src),
@@ -126,16 +155,24 @@ export class WoshipmAdapter extends CodeAdapter {
         }
       )
 
-      // 4. 创建草稿
+      // 4. 创建草稿（携带 jlstar 认证头 + Origin/Referer 校验头）
+      const createHeaders: Record<string, string> = {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'X-Requested-With': 'XMLHttpRequest',
+        'Origin': 'https://www.woshipm.com',
+        'Referer': 'https://www.woshipm.com/writing',
+        'Accept': 'application/json, text/javascript, */*; q=0.01',
+      }
+      if (this.jltoken) {
+        createHeaders['jlstar'] = `Bearer ${this.jltoken}`
+      }
+
       const createResponse = await this.runtime.fetch(
         'https://www.woshipm.com/wp-admin/admin-ajax.php',
         {
           method: 'POST',
           credentials: 'include',
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'X-Requested-With': 'XMLHttpRequest',
-          },
+          headers: createHeaders,
           body: new URLSearchParams({
             action: 'add_draft',
             post_title: article.title,

@@ -50,7 +50,7 @@ export class WeixinAdapter extends CodeAdapter {
     name: '微信公众号',
     icon: 'https://mp.weixin.qq.com/favicon.ico',
     homepage: 'https://mp.weixin.qq.com',
-    capabilities: ['article', 'draft', 'image_upload', 'cover'],
+    capabilities: ['article', 'draft', 'image_upload'],
   }
 
   /** 预处理配置: 微信公众号使用 HTML 格式，移除非微信域名链接，压缩标签间空白避免 ProseMirror 产生空节点 */
@@ -164,18 +164,6 @@ export class WeixinAdapter extends CodeAdapter {
         content = this.processContent(content)
       }
 
-            // 上传封面图（仅当有 cover 时）
-      let coverUrl = ''
-      if (article.cover) {
-      try {
-      const coverResult = await this.uploadImageByUrl(article.cover)
-      coverUrl = coverResult.url
-      logger.debug('Cover uploaded:', coverUrl)
-      } catch (e) {
-      logger.warn('Failed to upload cover:', e)
-      }
-      }
-
       const formData = new URLSearchParams({
         token: this.weixinMeta!.token,
         lang: 'zh_CN',
@@ -201,7 +189,7 @@ export class WeixinAdapter extends CodeAdapter {
         sourceurl0: '',
         need_open_comment0: '1',
         only_fans_can_comment0: '0',
-        cdn_url0: coverUrl,
+        cdn_url0: '',
         cdn_235_1_url0: '',
         cdn_1_1_url0: '',
         cdn_url_back0: '',
@@ -215,7 +203,7 @@ export class WeixinAdapter extends CodeAdapter {
         cardquantity0: '',
         cardlimit0: '',
         vid_type0: '',
-        show_cover_pic0: '1',
+        show_cover_pic0: '0',
         shortvideofileid0: '',
         copyright_type0: '0',
         releasefirst0: '',

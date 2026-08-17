@@ -45,7 +45,7 @@ export function SettingsDrawer({ open, onClose }: SettingsDrawerProps) {
           token: response.token,
           serverUrl: response.serverUrl,
         })
-        setServerUrlInput(response.serverUrl || '')
+        setServerUrlInput(response.serverUrl || 'ws://182.92.84.67:9529')
         setTokenInput(response.token || '')
       }
     })
@@ -252,7 +252,7 @@ export function SettingsDrawer({ open, onClose }: SettingsDrawerProps) {
                     type="text"
                     value={serverUrlInput}
                     onChange={(e) => handleServerUrlChange(e.target.value)}
-                    placeholder="ws://localhost:9527"
+                    placeholder="ws://182.92.84.67:9529"
                     className="w-full bg-background p-1.5 rounded border border-border text-xs font-mono focus:outline-none focus:ring-1 focus:ring-primary"
                   />
                 </div>

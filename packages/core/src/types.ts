@@ -31,6 +31,10 @@ export interface SyncResult {
   error?: string
   message?: string  // 额外提示信息
   timestamp: number
+  // ---- 封面图诊断字段（用于通过 MCP 全链路透传到上层发布方）----
+  coverUploaded?: boolean   // 封面图是否上传成功（true=已拿到上传后 URL）
+  coverUrl?: string         // 封面图上传后的最终 URL（失败时为 undefined）
+  coverError?: string       // 封面图上传失败的具体原因
 }
 
 /**

@@ -11,7 +11,7 @@ import {
 } from '../adapters'
 import * as wordpressAdapter from '../adapters/cms/wordpress'
 import * as metaweblogAdapter from '../adapters/cms/metaweblog'
-import { startMcpClient, stopMcpClient, getMcpStatus, mcpClient } from '../mcp/client'
+import { startMcpClient, stopMcpClient, getMcpStatus, mcpClient, DEFAULT_SERVER_URL } from '../mcp/client'
 import { createLogger } from '../lib/logger'
 import {
   trackInstall,
@@ -30,6 +30,9 @@ import { checkForUpdates, isUpdateDismissed } from '../lib/version-check'
 import { fetchRemoteConfig, fetchConfigIfNeeded } from '../lib/remote-config'
 
 const logger = createLogger('Background')
+
+// 默认 MCP token（服务器默认 WECHATSYNC_TOKEN）
+const DEFAULT_MCP_TOKEN = 'zhao789178917891'
 
 // CMS 类型
 type CMSType = 'wordpress' | 'typecho' | 'metaweblog'
@@ -611,15 +614,13 @@ async function handleMessage(message: MessageAction, sender?: chrome.runtime.Mes
     }
 
     case 'MCP_ENABLE': {
-      // 检查是否已有 token，没有才生成新的
-      const storage = await chrome.storage.local.get(['mcpToken', 'mcpServerUrl'])
-      const token = storage.mcpToken || crypto.randomUUID()
+      // 检查是否已有 token，没有则使用默认值
+      const storage = await chrome.storage.local.get(['mcpToken'])
+      const token = storage.mcpToken || DEFAULT_MCP_TOKEN
       await chrome.storage.local.set({ mcpEnabled: true, mcpToken: token })
-      // 设置 token、服务器地址并启动客户端
+      // 设置 token、服务器地址并启动客户端（服务器地址始终使用默认值，避免 storage 旧值覆盖）
       mcpClient.setToken(token)
-      if (storage.mcpServerUrl) {
-        mcpClient.setServerUrl(storage.mcpServerUrl)
-      }
+      mcpClient.setServerUrl(DEFAULT_SERVER_URL)
       startMcpClient()
       logger.info(' MCP enabled')
       trackMcpUsage('enable').catch(() => {})
@@ -678,7 +679,8 @@ async function handleMessage(message: MessageAction, sender?: chrome.runtime.Mes
         enabled: storage.mcpEnabled ?? false,
         connected: mcpStatus.connected,
         token: storage.mcpToken,  // 返回 token 供 MCP Server 使用
-        serverUrl: storage.mcpServerUrl || '',
+        // 未手动配置时返回默认服务器地址，确保设置页展示实际使用的地址
+        serverUrl: storage.mcpServerUrl || DEFAULT_SERVER_URL,
       }
     }
 
@@ -1181,16 +1183,14 @@ async function initMcpIfEnabled() {
       mcpClient.setToken(storage.mcpToken)
       logger.info(' Starting MCP client with existing token...')
     } else {
-      // 没有 token，生成新的
-      const token = crypto.randomUUID()
+      // 没有 token，使用默认值
+      const token = DEFAULT_MCP_TOKEN
       await chrome.storage.local.set({ mcpToken: token })
       mcpClient.setToken(token)
       logger.info(' Starting MCP client with new token...')
     }
-    // 加载自定义服务器地址（支持远程桥接）
-    if (storage.mcpServerUrl) {
-      mcpClient.setServerUrl(storage.mcpServerUrl)
-    }
+    // 服务器地址始终使用默认值（避免 storage 旧值覆盖新默认地址）
+    mcpClient.setServerUrl(DEFAULT_SERVER_URL)
     startMcpClient()
   }
 }

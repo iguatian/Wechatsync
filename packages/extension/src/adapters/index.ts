@@ -43,6 +43,16 @@ import {
   CnblogsAdapter,
   ZipDownloadAdapter,
   EastmoneyAdapter,
+  DayuAdapter,
+  JianshuAdapter,
+  NeteaseAdapter,
+  SmzdmAdapter,
+  ToutiaoAdapter,
+  SohuFocusAdapter,
+  YidianAdapter,
+  DouyinAdapter,
+  XiaohongshuAdapter,
+  XAdapter,
 } from '@wechatsync/core'
 
 // 私有适配器 - private/ 目录通过 git submodule 管理
@@ -97,6 +107,16 @@ const ADAPTER_CLASSES: AdapterConstructor[] = [
   CnblogsAdapter,
   ZipDownloadAdapter,
   EastmoneyAdapter,
+  DayuAdapter,
+  JianshuAdapter,
+  NeteaseAdapter,
+  SmzdmAdapter,
+  ToutiaoAdapter,
+  SohuFocusAdapter,
+  YidianAdapter,
+  DouyinAdapter,
+  XiaohongshuAdapter,
+  XAdapter,
   ...getPrivateAdapters(),
 ]
 

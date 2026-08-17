@@ -23,8 +23,8 @@
     }
   },
   "scripts": {
-    "dev": "tsup --watch",
-    "build": "tsup",
+    "dev": "node scripts/build.js --watch",
+    "build": "node scripts/build.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest",
     "clean": "rm -rf dist"

@@ -32,7 +32,7 @@ export class SohuAdapter extends CodeAdapter {
     name: '搜狐号',
     icon: 'https://mp.sohu.com/favicon.ico',
     homepage: 'https://mp.sohu.com/mpfe/v3/main/first/page?newsType=1',
-    capabilities: ['article', 'draft', 'image_upload'],
+    capabilities: ['article', 'draft', 'image_upload', 'cover'],
   }
 
   /** 预处理配置: 搜狐号使用 HTML 格式 */
@@ -168,6 +168,18 @@ export class SohuAdapter extends CodeAdapter {
         }
       )
 
+      // 上传封面图（仅当有 cover 时）
+      let coverUrl = ''
+      if (article.cover) {
+        try {
+          const coverResult = await this.uploadImageByUrl(article.cover)
+          coverUrl = coverResult.url
+          logger.debug('Cover uploaded:', coverUrl)
+        } catch (e) {
+          logger.warn('Failed to upload cover:', e)
+        }
+      }
+
       // 4. 保存草稿 (v2 API - JSON 格式)
       const postData = {
         title: article.title,
@@ -180,7 +192,7 @@ export class SohuAdapter extends CodeAdapter {
         columnNewsIds: [],
         businessCode: 0,
         declareOriginal: false,
-        cover: '',
+        cover: coverUrl,
         topicIds: [],
         isAd: 0,
         userLabels: '[]',
@@ -242,8 +254,11 @@ export class SohuAdapter extends CodeAdapter {
       throw new Error('未登录')
     }
 
+    // 对 URL 路径中的非 ASCII 字符（如中文）进行百分号编码，确保封面图能正确下载
+    const encodedSrc = this.encodeUrlPath(src)
+
     // 1. 下载图片
-    const imageResponse = await fetch(src)
+    const imageResponse = await fetch(encodedSrc)
     if (!imageResponse.ok) {
       throw new Error('图片下载失败: ' + src)
     }

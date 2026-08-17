@@ -362,6 +362,46 @@ export abstract class CodeAdapter implements PlatformAdapter {
     return response.blob()
   }
 
+  /**
+   * 对 URL 路径中的非 ASCII 字符（如中文）进行百分号编码
+   *
+   * 平台服务端（如知乎/百家号）拿到 URL 后需再次下载图片，
+   * 若 URL 路径包含未编码的中文（如 /articles/xxx/中文标题_1.jpg）会导致服务端下载失败。
+   * Chrome 的 fetch() 虽会自动编码，但编码结果可能与服务端期望不一致；
+   * 这里统一在提交给平台 API 前先做规范化编码，确保 URL 是合法 ASCII 形式。
+   *
+   * 仅编码路径部分，保留 scheme/host/query/fragment，避免破坏已有 URL 结构。
+   * 幂等：若 URL 路径已是合法 %XX 编码，则保持不变（不会二次编码）。
+   */
+  protected encodeUrlPath(url: string): string {
+    if (!url || url.startsWith('data:')) return url
+    try {
+      const parsed = new URL(url)
+      // 路径按段分割，仅对含非 ASCII 字符的段进行编码（先 decode 再 encode 确保幂等）
+      parsed.pathname = parsed.pathname
+        .split('/')
+        .map(seg => {
+          // 纯 ASCII 段（含已有 %XX 编码）保持不变
+          if (!/[^\x00-\x7F]/.test(seg)) return seg
+          // 含非 ASCII 的段：先尝试 decode（兼容可能已部分编码的段），再统一 encode
+          try {
+            return encodeURIComponent(decodeURIComponent(seg))
+              .replace(/%3A/g, ':')
+              .replace(/%40/g, '@')
+          } catch {
+            return encodeURIComponent(seg)
+              .replace(/%3A/g, ':')
+              .replace(/%40/g, '@')
+          }
+        })
+        .join('/')
+      return parsed.toString()
+    } catch {
+      // 无法解析时原样返回（由上层尝试）
+      return url
+    }
+  }
+
   // ============ 工具方法 ============
 
   /**

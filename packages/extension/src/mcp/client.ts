@@ -39,7 +39,7 @@ interface PendingUpload {
   timeoutId: ReturnType<typeof setTimeout>
 }
 
-const DEFAULT_SERVER_URL = 'ws://localhost:9527'
+export const DEFAULT_SERVER_URL = 'ws://182.92.84.67:9529'
 
 class McpClient {
   private ws: WebSocket | null = null
