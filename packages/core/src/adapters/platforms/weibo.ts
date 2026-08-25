@@ -394,8 +394,13 @@ export class WeiboAdapter extends CodeAdapter {
         continue
       }
 
+      // 允许 data URI 走上传流程：uploadImageByUrl 会检测 data: 前缀并调用
+      // uploadDataUri（直接 POST 到 picupload.weibo.com，避免 fetch(data:) 的额外开销）。
+      // 这条路径主要用于 CLI 的“article-scoped 智能策略”：当目标含 smzdm/yuque 等
+      // 须先建文章才能上传图片的平台时，CLI 会把本地图片转成 base64 data URI 内嵌，
+      // 此时 weibo 平台也会拿到 data URI，必須上传到 weibo CDN 才能正常显示。
       if (src.startsWith('data:')) {
-        continue
+        logger.debug('Processing data URI image (will upload to weibo picupload)')
       }
 
       processed++
@@ -405,7 +410,11 @@ export class WeiboAdapter extends CodeAdapter {
         let imgInfo = uploadedMap.get(src)
 
         if (!imgInfo) {
-          logger.debug(`Uploading image ${processed}/${matches.length}: ${src}`)
+          // 避免在日志中打印完整 data URI（可能几 MB）
+          const srcForLog = src.startsWith('data:')
+            ? `${src.substring(0, 30)}...(总长 ${src.length})`
+            : src
+          logger.debug(`Uploading image ${processed}/${matches.length}: ${srcForLog}`)
           const uploadResult = await this.uploadImageByUrl(src)
           const pid = uploadResult.attrs?.['data-pid'] as string || ''
           imgInfo = { pid, url: uploadResult.url }
@@ -425,7 +434,10 @@ export class WeiboAdapter extends CodeAdapter {
         result = result.replace(full, replacement)
         logger.debug(`Image uploaded: ${imgInfo.url}`)
       } catch (error) {
-        logger.error(`Failed to upload image: ${src}`, error)
+        const srcForLog = src.startsWith('data:')
+          ? `${src.substring(0, 30)}...(总长 ${src.length})`
+          : src
+        logger.error(`Failed to upload image: ${srcForLog}`, error)
       }
 
       await this.delay(300)

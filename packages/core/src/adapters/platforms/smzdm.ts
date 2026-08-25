@@ -89,6 +89,17 @@ function delayWithJitter(base: number): Promise<void> {
 }
 
 /**
+ * 读取 Blob 图片尺寸（Service Worker 中没有 Image 对象，
+ * 使用 createImageBitmap 读宽高）。
+ */
+async function getImageDimensions(blob: Blob): Promise<{ width: number; height: number }> {
+  const bitmap = await createImageBitmap(blob)
+  const { width, height } = bitmap
+  bitmap.close()
+  return { width, height }
+}
+
+/**
  * 什么值得买请求默认 Headers
  */
 const REQUEST_HEADERS: Record<string, string> = {
@@ -189,6 +200,9 @@ export class SmzdmAdapter extends CodeAdapter {
    */
   private async getCsrfTokenFromApi(): Promise<string | null> {
     try {
+      // 裸请求（useDefaultHeaders=false）：不携带伪造的 sec-ch-ua 系列头。
+      // 此前带 fake sec-ch-ua（platform=macOS 与真实 Windows 环境矛盾）时
+      // WAF 可能干扰 get_token 返回，导致 token 无效，进而 crop 报 error_code=7。
       const res = await (await this.fetchWithRetry(
         'https://post.smzdm.com/api/editor/get_token',
         {
@@ -197,18 +211,25 @@ export class SmzdmAdapter extends CodeAdapter {
           headers: {
             'Accept': 'application/json, text/plain, */*',
           },
-        }
+        },
+        5,
+        false
       )).json() as {
         error_code?: number | string
         error_msg?: string
-        data?: { token?: string }
+        data?: { token?: string } | string
       }
 
-      if (res.error_code === 0 && res.data?.token) {
-        logger.debug('Got CSRF token from get_token API')
-        return res.data.token
+      if (res.error_code === 0) {
+        // 兼容两种返回结构：data: { token: 'xxx' } 或 data: 'xxx'（字符串 token）
+        const token = typeof res.data === 'string' ? res.data : res.data?.token
+        if (token) {
+          logger.debug('Got CSRF token from get_token API')
+          return token
+        }
       }
-      logger.warn('get_token API returned no token:', res.error_msg || JSON.stringify(res))
+      // 完整响应打印，便于诊断 token 获取失败的具体原因
+      logger.warn('get_token API returned no token:', JSON.stringify(res).slice(0, 300))
     } catch (error) {
       logger.warn('Failed to get CSRF token from API:', (error as Error).message)
     }
@@ -279,9 +300,18 @@ export class SmzdmAdapter extends CodeAdapter {
   private async fetchWithRetry(
     url: string,
     options: RequestInit = {},
-    maxRetries = 5
+    maxRetries = 5,
+    /**
+     * 为 false 时不应用 REQUEST_HEADERS（例如调用方完全控制 headers）。
+     * 默认为 true，保持原有行为。
+     */
+    useDefaultHeaders = true
   ): Promise<Response> {
-    const headers = { ...REQUEST_HEADERS, ...(options.headers || {}) }
+    // useDefaultHeaders=false：仅使用 options.headers，适合需要“裸请求”
+    // 的场景（如 smzdm /api/image/crop 会被 WAF 拦住任何 fake sec-ch-ua-*）
+    const headers = useDefaultHeaders
+      ? { ...REQUEST_HEADERS, ...(options.headers || {}) }
+      : { ...(options.headers || {}) }
     const requestOptions: RequestInit = { ...options, headers }
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -385,11 +415,367 @@ export class SmzdmAdapter extends CodeAdapter {
   }
 
   /**
+   * 确保存在 smzdm 文章编辑页 tab
+   *
+   * 背景：smzdm 的 `POST /api/image/crop` 接口对请求的 `Origin` 头极其严格，
+   * 只接受 `https://post.smzdm.com`。但 MV3 Service Worker 的 fetch 会被 Chrome
+   * 强制把 Origin 设为 `chrome-extension://<id>`，无法用 JS 覆盖，导致 WAF 拦截。
+   *
+   * 绕过思路：在 `https://post.smzdm.com/edit/<article_id>` 的 MAIN world 里 fetch，
+   * origin 自动是 smzdm 域名，与用户手动在浏览器里点“确认此图”完全一致。
+   */
+  private async ensureSmzdmEditTab(articleId: string): Promise<number> {
+    if (!this.runtime.tabs) {
+      throw new Error('smzdm 封面裁剪需要浏览器 tabs API 支持（CLI 环境不支持封面裁剪）')
+    }
+    const urlPattern = `*://post.smzdm.com/edit/${articleId}*`
+    const tabs = await this.runtime.tabs.query(urlPattern)
+    if (tabs.length > 0 && tabs[0].id) {
+      logger.debug(`Reusing smzdm edit tab: ${tabs[0].id}`)
+      return tabs[0].id
+    }
+    logger.info(`No smzdm edit tab, creating one for article ${articleId}...`)
+    const tab = await this.runtime.tabs.create(
+      `https://post.smzdm.com/edit/${articleId}`,
+      false
+    )
+    await this.runtime.tabs.waitForLoad(tab.id, 30000)
+    // smzdm 是 SPA，等待 ProseMirror/编辑器初始化
+    await delayWithJitter(1500)
+    logger.info(`Smzdm edit tab created and loaded: ${tab.id}`)
+    return tab.id
+  }
+
+  /**
+   * 在 smzdm 编辑页 MAIN world 里调用 `/api/image/crop`
+   *
+   * 重要：
+   * 1. FormData 不能跨 executeScript 边界传输，必须把 entry 转成 `[key, value][]`
+   *    字符串对。crop 接口所有字段都是字符串（cutUrl/article_id/src_x/.../is_head），
+   *    所以可以这么做。
+   * 2. 在 MAIN world 调用 fetch，浏览器自动带上同源 cookie 和正确的 Origin/Referer。
+   * 3. declarativeNetRequest 的 HEADER_RULES 作用域是 `initiatorDomains=[extension_id]`，
+   *    只影响扩展自身（包括 Service Worker）发起的请求，**不会影响页面本身的 fetch**，
+   *    所以无需 clearHeaderRules。
+   * 4. 必须同时携带 `_csrf_token` 请求头：smzdm 后端依赖该 token
+   *    识别“是否 smzdm 自己的 ProseMirror 上传”，未携带或 token 过期会返回
+   *    `error_code=7, error_msg="上传成功", msg="网络不稳定，请稍后重试"`。
+   */
+  private async cropInEditTab<T = Record<string, unknown>>(
+    articleId: string,
+    formEntries: Array<[string, string]>,
+    uploadId?: string | number
+  ): Promise<T> {
+    if (!this.runtime.tabs) {
+      throw new Error('smzdm 封面裁剪需要浏览器 tabs API 支持')
+    }
+    const tabId = await this.ensureSmzdmEditTab(articleId)
+    const url = 'https://post.smzdm.com/api/image/crop'
+
+    logger.debug(`Executing crop in smzdm edit tab ${tabId}, ${formEntries.length} form fields, uploadId=${uploadId ?? 'none'}`)
+
+    const result = await this.runtime.tabs.executeScript<
+      {
+        success: boolean
+        data?: T
+        error?: string
+        // 诊断信息
+        httpStatus?: number
+        finalUrl?: string
+        setCookie?: string
+        fetchType?: string
+        variantUsed?: string
+        variantResults?: Array<{
+          name: string
+          httpStatus?: number
+          ok: boolean
+          response?: string
+          error?: string
+        }>
+        pageContext?: Record<string, unknown> | null
+        logs?: Array<{ event: string; payload: Record<string, unknown> }>
+      },
+      [string, Array<[string, string]>, boolean, string]
+    >(
+      tabId,
+      async (requestUrl: string, entries: Array<[string, string]>, diag: boolean, uploadIdStr: string) => {
+        // 注意：MAIN world 中 chrome.runtime 不可用（sendMessage 实际无效），
+        // 诊断日志同时收集到 logs 数组，随 executeScript 返回值回传给扩展侧打印。
+        const logs: Array<{ event: string; payload: Record<string, unknown> }> = []
+        const log = (event: string, extra: Record<string, unknown> = {}): void => {
+          if (!diag) return
+          logs.push({ event, payload: { ...extra } })
+          try {
+            const g: any = globalThis
+            g.chrome?.runtime?.sendMessage?.({
+              type: 'SMZDM_CROP_DIAG',
+              event,
+              payload: { ...extra },
+            })
+          } catch {
+            // MAIN world 无 chrome.runtime，忽略
+          }
+        }
+
+        log('crop_script_started', { entriesCount: entries.length })
+
+        // 探测页面上下文（结果随返回值回传，供核对 token/前端对象）
+        let pageContext: Record<string, unknown> | null = null
+        try {
+          const g: any = globalThis
+          // 探测前端暴露的全局 editor 对象（ProseMirror/Vue 封装实例），
+          // 尝试从中找到前端自身的上传/裁剪函数入口
+          const editorInfo: Record<string, unknown> = {}
+          const ed = g.editor
+          if (ed) {
+            editorInfo.type = typeof ed
+            try {
+              editorInfo.keys = Object.keys(ed).slice(0, 100)
+            } catch {
+              editorInfo.keys = 'n/a'
+            }
+            try {
+              const proto = Object.getPrototypeOf(ed)
+              editorInfo.protoKeys = proto ? Object.getOwnPropertyNames(proto).slice(0, 100) : []
+            } catch {
+              editorInfo.protoKeys = 'n/a'
+            }
+            const children: Record<string, string[]> = {}
+            if (typeof ed === 'object' && ed !== null) {
+              for (const k of Object.keys(ed).slice(0, 30)) {
+                try {
+                  const child = ed[k]
+                  if (child && typeof child === 'object') {
+                    children[k] = Object.keys(child).slice(0, 30)
+                  }
+                } catch {
+                  // 忽略无法枚举的子对象
+                }
+              }
+            }
+            editorInfo.children = children
+            // 深挖 Vue 组件实例暴露的方法（exposed/exposeProxy 是组件对外接口）
+            try {
+              const cc = ed?.contentComponent
+              const exposed = cc?.exposed
+              const exposeProxy = cc?.exposeProxy
+              if (exposed) editorInfo.exposedKeys = Object.keys(exposed).slice(0, 60)
+              if (exposeProxy) editorInfo.exposeProxyKeys = Object.keys(exposeProxy).slice(0, 60)
+            } catch {
+              // 无 Vue 组件实例则跳过
+            }
+            try {
+              const cm = ed?.commandManager
+              if (cm?.rawCommands) editorInfo.rawCommandKeys = Object.keys(cm.rawCommands).slice(0, 80)
+              if (cm?.customState) editorInfo.customStateKeys = Object.keys(cm.customState).slice(0, 80)
+            } catch {
+              // 无 commandManager 则跳过
+            }
+            try {
+              const cb = ed?.callbacks
+              if (cb) editorInfo.callbackKeys = Object.keys(cb).slice(0, 80)
+            } catch {
+              // 无 callbacks 则跳过
+            }
+          }
+          pageContext = {
+            cookies: document.cookie
+              .split(';')
+              .map((c) => c.split('=')[0].trim())
+              .filter((n) => /csrf|token/i.test(n)),
+            globals: Object.keys(g).filter((k) => /csrf|token|editor|upload|smzdm|crop/i.test(k)).slice(0, 40),
+            hasInitialState: !!g.__INITIAL_STATE__,
+            hasVue: !!g.Vue,
+            editorInfo,
+          }
+        } catch (ctxError) {
+          pageContext = { error: (ctxError as Error).message }
+        }
+
+        // 变体结果收集（try/catch 均需要引用，声明在外部）
+        const variantResults: Array<{
+          name: string
+          httpStatus?: number
+          ok: boolean
+          response?: string
+          error?: string
+        }> = []
+
+        try {
+          // 基准请求头（对齐前端真实请求，见手动抓包）：
+          // 前端 crop 请求不带 _csrf_token 和 x-requested-with，带 cache-control/pragma
+          const baseFetchHeaders: Record<string, string> = {
+            accept: 'application/json, text/plain, */*',
+            'accept-language': 'zh-CN,zh;q=0.9',
+            'cache-control': 'no-cache',
+            pragma: 'no-cache',
+          }
+
+          // cutUrl 已是 SW 侧经 /api/image/original 换取的 tmpf 原始图 URL，直接使用
+          const entriesObj: Record<string, string> = {}
+          for (const [k, v] of entries) entriesObj[k] = v
+
+          const clone = (patch: Record<string, string>): Record<string, string> => ({ ...entriesObj, ...patch })
+          const entriesVariants: Array<{
+            name: string
+            obj: Record<string, string>
+          }> = [
+            { name: 'original-url', obj: clone({}) },
+          ]
+
+          let lastData: unknown = null
+          let lastStatus = 0
+          let variantUsed = 'none'
+
+          for (let i = 0; i < entriesVariants.length; i++) {
+            const v = entriesVariants[i]
+            log('crop_variant_start', { index: i, name: v.name })
+            // 变体间留出间隔，避免连续请求触发 WAF 限流
+            if (i > 0) await new Promise((r) => setTimeout(r, 600))
+
+            const body: BodyInit = (() => {
+              const f = new FormData()
+              for (const [k, val] of Object.entries(v.obj)) f.append(k, val)
+              return f
+            })()
+            const headers: Record<string, string> = { ...baseFetchHeaders }
+
+            let response: Response
+            try {
+              response = await fetch(requestUrl, {
+                method: 'POST',
+                credentials: 'include',
+                headers,
+                body,
+              })
+            } catch (fetchError) {
+              variantResults.push({ name: v.name, ok: false, error: (fetchError as Error).message })
+              continue
+            }
+            let data: unknown
+            try {
+              data = await response.json()
+            } catch (parseError) {
+              data = {
+                error_code: -1,
+                error_msg: `HTTP ${response.status}`,
+                raw: (await response.text()).slice(0, 300),
+              }
+            }
+            lastData = data
+            lastStatus = response.status
+            const d = data as { error_code?: number | string; data?: Array<{ pic_url?: string }> }
+            const ok = d.error_code === 0 && Array.isArray(d.data) && !!d.data[0]?.pic_url
+            const responseText = JSON.stringify(data).slice(0, 400)
+            variantResults.push({ name: v.name, httpStatus: response.status, ok, response: responseText })
+            log('crop_variant_done', {
+              index: i,
+              name: v.name,
+              httpStatus: response.status,
+              ok,
+              response: responseText,
+            })
+
+            if (ok) {
+              variantUsed = v.name
+              return {
+                success: true,
+                data: data as T,
+                httpStatus: response.status,
+                finalUrl: response.url,
+                setCookie: response.headers.get('set-cookie') || undefined,
+                fetchType: response.type,
+                variantUsed,
+                variantResults,
+                pageContext,
+                logs,
+              }
+            }
+          }
+
+          // 所有变体均未成功：返回最后一个响应供上层报错/诊断
+          return {
+            success: true,
+            data: lastData as T,
+            httpStatus: lastStatus,
+            variantUsed,
+            variantResults,
+            pageContext,
+            logs,
+          }
+        } catch (error) {
+          log('crop_outer_threw', { error: (error as Error).message })
+          return {
+            success: false,
+            error: (error as Error).message,
+            variantResults,
+            pageContext,
+            logs,
+          }
+        }
+      },
+      [url, formEntries, true, uploadId ? String(uploadId) : '']
+    )
+
+    if (!result || !result.success) {
+      throw new Error((result as { error?: string })?.error || '封面裁剪请求失败')
+    }
+
+    // 诊断：打印 crop 接口返回的所有信息
+    if (result.httpStatus !== undefined) {
+      logger.debug(`Crop HTTP ${result.httpStatus}, finalUrl=${result.finalUrl}, setCookie=${result.setCookie || 'none'}, type=${result.fetchType}`)
+    }
+    logger.debug(`Crop response: ${JSON.stringify(result.data)}`)
+
+    // 打印变体对比结果（MAIN world 的 sendMessage 通道在页面上下文不可用，
+    // 诊断信息必须通过 executeScript 返回值回传）
+    if (result.variantResults?.length) {
+      for (const v of result.variantResults) {
+        logger.debug(
+          `Crop variant [${v.name}]: http=${v.httpStatus ?? '-'} ok=${v.ok} ${v.response ? v.response : v.error || ''}`
+        )
+      }
+    }
+    if (result.variantUsed) {
+      logger.debug(`Crop variant used: ${result.variantUsed}`)
+    }
+    if (result.pageContext) {
+      logger.debug(`Crop page context: ${JSON.stringify(result.pageContext).slice(0, 500)}`)
+    }
+    if (result.logs?.length) {
+      for (const l of result.logs) {
+        logger.debug(`CropDiag [${l.event}] ${JSON.stringify(l.payload).slice(0, 400)}`)
+      }
+    }
+
+    return (result as { data: T }).data
+  }
+
+  /**
    * 通过 URL 上传图片
+   * 支持 data URI：避免对 data: URI 调用 fetch（Chrome MV3 Service Worker 中
+   * fetch(data:) 也能工作，但绕过 fetch 可以节省一次额外的 base64 编解码开销）
    */
   protected async uploadImageByUrl(src: string): Promise<ImageUploadResult> {
-    const imageResponse = await this.runtime.fetch(src)
-    const imageBlob = await imageResponse.blob()
+    // data URI 直接转换，跳过 fetch
+    let imageBlob: Blob
+    if (src.startsWith('data:')) {
+      const match = src.match(/^data:([^;]+);base64,(.+)$/)
+      if (!match) {
+        throw new Error('Invalid data URI format')
+      }
+      const mimeType = match[1]
+      const base64 = match[2]
+      const binary = atob(base64)
+      const bytes = new Uint8Array(binary.length)
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i)
+      }
+      imageBlob = new Blob([bytes], { type: mimeType })
+    } else {
+      const imageResponse = await this.runtime.fetch(src)
+      imageBlob = await imageResponse.blob()
+    }
 
     if (!this._currentArticleId) {
       throw new Error('上传图片需要先创建文章')
@@ -447,6 +833,197 @@ export class SmzdmAdapter extends CodeAdapter {
           }
         )
 
+        // 2.5 处理封面图
+        // smzdm 封面分为两种：
+        //  - 长图（cover_image_rectangle）：文章详情页用，建议 1484×628（比例 2.36:1）
+        //  - 方图（cover_image_square / focus_image）：首页列表、社区列表用
+        // smzdm 服务端会裁剪出两种尺寸，所以先调 /api/images/upload/local 拿到原始
+        // tmpf URL，再调 /api/image/crop 让服务端裁剪。返回的 pic_url 为长图，
+        // square_pic_url 为方图。
+        // CLI 在同步时把本地图转为 data URI 传入 article.cover（见 packages/cli/src/index.ts），
+        // 这里的逻辑统一处理 data URI、http URL 以及 smzdm 域名 URL：
+        //  - data URI / 其他 URL：先上传再裁剪
+        //  - 已是 smzdm 图床 URL：直接复用，但尺寸裁剪仍需重新走一次 crop（未知原图尺寸
+        //    时跳过裁剪，只填原 URL，方图仍可显示，长图会被平台拒绝
+        //    ——这种情况下提示用户手动上传封面）
+        let focusImage = ''
+        let coverImageRect = ''
+        let coverImageSquare = ''
+        if (article.cover) {
+          if (/(?:^|\.)zdmimg\.com|(?:^|\.)smzdm\.com|(?:^|\.)tmpf\.smzdm\.com/.test(article.cover)) {
+            // 已是 smzdm 图床 URL，无法读取原图尺寸 → 只能填方图位置
+            focusImage = article.cover
+            coverImageSquare = article.cover
+            logger.debug(`Cover already on smzdm CDN (skip crop): ${focusImage}`)
+            logger.warn('Cover is a smzdm URL with unknown dimensions; long cover will be empty')
+          } else {
+            try {
+              // 1. 转 Blob
+              let coverBlob: Blob
+              if (article.cover.startsWith('data:')) {
+                const match = article.cover.match(/^data:([^;]+);base64,(.+)$/)
+                if (!match) {
+                  throw new Error('Invalid data URI format')
+                }
+                const mimeType = match[1]
+                const base64 = match[2]
+                const binary = atob(base64)
+                const bytes = new Uint8Array(binary.length)
+                for (let i = 0; i < binary.length; i++) {
+                  bytes[i] = binary.charCodeAt(i)
+                }
+                coverBlob = new Blob([bytes], { type: mimeType })
+              } else {
+                const imgRes = await this.runtime.fetch(article.cover)
+                coverBlob = await imgRes.blob()
+              }
+
+              // 2. 上传原图 + 换取 tmpf 原始图 URL。
+              // 前端完整流程（见手动抓包）：
+              //   upload/local（imgFile+id=WU_FILE_0+type+article_id，无 insert/storage/size）
+              //   → /api/image/original（article_id + am URL 换 tmpf 原始图 URL）
+              //   → /api/image/crop（cutUrl 必须用 tmpf 域名 URL，am 域名会报 error_code=7）
+              const dimensions = await getImageDimensions(coverBlob)
+
+              const uploadForm = new FormData()
+              uploadForm.append('imgFile', coverBlob, 'cover.jpg')
+              uploadForm.append('id', 'WU_FILE_0')
+              uploadForm.append('type', coverBlob.type || 'image/png')
+              uploadForm.append('article_id', articleId)
+
+              const uploadRes = await (await this.fetchWithRetry(
+                'https://post.smzdm.com/api/images/upload/local',
+                { method: 'POST', credentials: 'include', body: uploadForm }
+              )).json() as {
+                error_code?: number | string
+                error_msg?: string
+                data?: { url?: string; small_pic?: string; id?: number | string }
+              }
+              if (uploadRes.error_code !== 0 || !uploadRes.data?.url) {
+                throw new Error(`封面原图上传失败: ${uploadRes.error_msg || JSON.stringify(uploadRes)}`)
+              }
+              logger.debug(`Cover upload response: ${JSON.stringify(uploadRes).slice(0, 400)}`)
+
+              // 前端随后调 /api/image/original：用 article_id + am URL 换取 tmpf 原始图 URL
+              type OriginalResp = {
+                error_code?: number | string
+                error_msg?: string
+                data?: { original_url?: string; width?: number; height?: number }
+              }
+              const originalBody = `article_id=${encodeURIComponent(articleId)}&pic_url=${encodeURIComponent(uploadRes.data.url)}`
+              const originalRes = await (await this.fetchWithRetry(
+                'https://post.smzdm.com/api/image/original',
+                {
+                  method: 'POST',
+                  credentials: 'include',
+                  headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+                  body: originalBody,
+                }
+              )).json() as OriginalResp
+              logger.debug(`Image original response: ${JSON.stringify(originalRes).slice(0, 400)}`)
+              const originalUrl = originalRes.data?.original_url || uploadRes.data.url
+              if (!originalRes.data?.original_url) {
+                logger.warn('image/original did not return original_url, crop may fail with error_code=7')
+              }
+              logger.debug(`Cover original uploaded: ${originalUrl} (${dimensions.width}x${dimensions.height})`)
+
+              // 3. 调用 crop 接口生成两种尺寸
+              // 长图比例 1484:628 ≈ 2.36:1（smzdm 建议尺寸）
+              const targetRatio = 1484 / 628
+              const originalRatio = dimensions.width / dimensions.height
+
+              let srcX = 0
+              let srcY = 0
+              let srcW = dimensions.width
+              let srcH = dimensions.height
+
+              if (originalRatio > targetRatio) {
+                // 原图更宽，裁剪左右两侧保留中间
+                srcW = dimensions.height * targetRatio
+                srcX = (dimensions.width - srcW) / 2
+              } else if (originalRatio < targetRatio) {
+                // 原图更高，裁剪上下两侧保留中间
+                srcH = dimensions.width / targetRatio
+                srcY = (dimensions.height - srcH) / 2
+              }
+              // 比例正好则不裁剪
+
+              // 输出尺寸：前端真实请求的 size_w/h 是“显示尺寸”（裁剪弹窗中图片显示
+              // 宽度 416px），而非输出尺寸；后端按 src_w/h 与 size_w/h 比例校验。
+              const displayW = 416
+              const displayH = (displayW * srcH) / srcW
+
+              const cropperData = {
+                x: srcX,
+                y: srcY,
+                width: srcW,
+                height: srcH,
+                rotate: 0,
+                scaleX: 1,
+                scaleY: 1,
+              }
+
+              const cropForm = new FormData()
+              cropForm.append('cut_pic_list[0][src_x]', String(srcX))
+              cropForm.append('cut_pic_list[0][src_y]', String(srcY))
+              cropForm.append('cut_pic_list[0][src_w]', String(srcW))
+              cropForm.append('cut_pic_list[0][src_h]', String(srcH))
+              cropForm.append('cut_pic_list[0][article_id]', articleId)
+              cropForm.append('cut_pic_list[0][size_w]', String(displayW))
+              cropForm.append('cut_pic_list[0][size_h]', String(displayH))
+              cropForm.append('cut_pic_list[0][cropperData]', JSON.stringify(cropperData))
+              cropForm.append('cut_pic_list[0][original_pic_height]', String(dimensions.height))
+              cropForm.append('cut_pic_list[0][original_pic_width]', String(dimensions.width))
+              cropForm.append('cut_pic_list[0][cutUrl]', originalUrl)
+              cropForm.append('cut_pic_list[0][is_head]', '1')
+
+              // 把 FormData 转成可序列化 entries（executeScript 跨 context 不能传 FormData）
+              const cropEntries: Array<[string, string]> = []
+              cropForm.forEach((value, key) => {
+                if (typeof value === 'string') {
+                  cropEntries.push([key, value])
+                }
+              })
+              logger.debug(`Crop entries: ${JSON.stringify(cropEntries).slice(0, 600)}`)
+
+              // crop 接口 WAF 极严格：URL=https://post.smzdm.com/api/image/crop。
+              // MV3 Service Worker 的 fetch 会被 Chrome 强制设 Origin=chrome-extension://...，
+              // smzdm WAF 检测到 origin 非浏览器域名直接返回 error_code=7。
+              // 解决：在编辑页 https://post.smzdm.com/edit/<article_id> 的 MAIN world
+              // 执行 fetch，此时 origin 自动是 https://post.smzdm.com，可绕过 WAF。
+              type CropResponse = {
+                error_code?: number | string
+                error_msg?: string
+                data?: Array<{
+                  pic_url?: string
+                  square_pic_url?: string
+                }>
+              }
+              let cropRes: CropResponse
+              try {
+                // 前端真实 crop 请求不带 _csrf_token 头（见手动抓包），无需获取 token
+                cropRes = await this.cropInEditTab<CropResponse>(articleId, cropEntries, uploadRes.data.id)
+              } catch (cropError) {
+                logger.warn(`Crop via MAIN world failed: ${(cropError as Error).message}`)
+                throw cropError
+              }
+
+              if (cropRes.error_code !== 0 || !cropRes.data?.[0]?.pic_url) {
+                throw new Error(`封面裁剪失败: ${cropRes.error_msg || JSON.stringify(cropRes)}`)
+              }
+              const picUrl = cropRes.data[0].pic_url
+              const squarePicUrl = cropRes.data[0].square_pic_url || picUrl
+              focusImage = squarePicUrl
+              coverImageRect = picUrl
+              coverImageSquare = squarePicUrl
+              logger.debug(`Cover cropped: long=${picUrl} square=${squarePicUrl}`)
+            } catch (error) {
+              logger.warn(`Failed to upload cover: ${(error as Error).message}`)
+              // 降级：不阻断草稿保存，草稿仍可在 smzdm 编辑器里手动选择封面
+            }
+          }
+        }
+
         // 3. 保存草稿（前端实际用 form-urlencoded 提交，awne/wne 为 form 字段，
         //    已用官方真实请求校准签名算法）
         const formData = new URLSearchParams()
@@ -455,7 +1032,7 @@ export class SmzdmAdapter extends CodeAdapter {
         formData.append('title', article.title)
         formData.append('editorValue', content)
         formData.append('series_title', '')
-        formData.append('focus_image', '')
+        formData.append('focus_image', focusImage)
         formData.append('series_order_id', '0')
         formData.append('series_id', '0')
         formData.append('anonymous', '0')
@@ -463,9 +1040,9 @@ export class SmzdmAdapter extends CodeAdapter {
         formData.append('remark', '')
         formData.append('create_state_type', '3')
         formData.append('ai_state_type', '3')
-        formData.append('square_pic_url', '')
-        formData.append('cover_image_rectangle', '')
-        formData.append('cover_image_square', '')
+        formData.append('square_pic_url', focusImage)
+        formData.append('cover_image_rectangle', coverImageRect)
+        formData.append('cover_image_square', coverImageSquare)
         formData.append('custom_topics', '')
         formData.append('group_id', '')
 

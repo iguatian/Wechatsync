@@ -234,11 +234,28 @@ export class YuqueAdapter extends CodeAdapter {
       throw new Error('文档 ID 未设置')
     }
 
-    const imageResponse = await fetch(src)
-    if (!imageResponse.ok) {
-      throw new Error('图片下载失败: ' + src)
+    // data URI 直接转换，跳过 fetch
+    let imageBlob: Blob
+    if (src.startsWith('data:')) {
+      const match = src.match(/^data:([^;]+);base64,(.+)$/)
+      if (!match) {
+        throw new Error('Invalid data URI format')
+      }
+      const mimeType = match[1]
+      const base64 = match[2]
+      const binary = atob(base64)
+      const bytes = new Uint8Array(binary.length)
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i)
+      }
+      imageBlob = new Blob([bytes], { type: mimeType })
+    } else {
+      const imageResponse = await fetch(src)
+      if (!imageResponse.ok) {
+        throw new Error('图片下载失败: ' + src)
+      }
+      imageBlob = await imageResponse.blob()
     }
-    const imageBlob = await imageResponse.blob()
 
     const formData = new FormData()
     formData.append('file', imageBlob, 'image.jpg')

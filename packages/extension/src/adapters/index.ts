@@ -51,8 +51,9 @@ import {
   SohuFocusAdapter,
   YidianAdapter,
   DouyinAdapter,
-  XiaohongshuAdapter,
-  XAdapter,
+  // FIXME: 适配器文件尚未实现，临时注释以通过构建
+  // XiaohongshuAdapter,
+  // XAdapter,
 } from '@wechatsync/core'
 
 // 私有适配器 - private/ 目录通过 git submodule 管理
@@ -115,8 +116,9 @@ const ADAPTER_CLASSES: AdapterConstructor[] = [
   SohuFocusAdapter,
   YidianAdapter,
   DouyinAdapter,
-  XiaohongshuAdapter,
-  XAdapter,
+  // FIXME: 适配器文件尚未实现，临时注释以通过构建
+  // XiaohongshuAdapter,
+  // XAdapter,
   ...getPrivateAdapters(),
 ]
 

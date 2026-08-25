@@ -7,17 +7,17 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "yarn workspace @wechatsync/extension dev",
-    "build": "yarn workspaces run build",
-    "build:core": "yarn workspace @wechatsync/core build",
-    "build:extension": "yarn workspace @wechatsync/extension build",
-    "build:mcp": "yarn workspace @wechatsync/mcp-server build",
-    "build:cli": "yarn workspace @wechatsync/cli build",
-    "mcp": "yarn workspace @wechatsync/mcp-server start",
-    "test": "yarn workspaces run test",
+    "dev": "pnpm --filter @wechatsync/extension dev",
+    "build": "pnpm -r --workspace-concurrency=1 run build",
+    "build:core": "pnpm --filter @wechatsync/core build",
+    "build:extension": "pnpm --filter @wechatsync/extension build",
+    "build:mcp": "pnpm --filter @wechatsync/mcp-server build",
+    "build:cli": "pnpm --filter @wechatsync/cli build",
+    "mcp": "pnpm --filter @wechatsync/mcp-server start",
+    "test": "pnpm -r run test",
     "lint": "eslint packages --ext .ts,.tsx",
-    "typecheck": "yarn workspaces run typecheck",
-    "clean": "yarn workspaces run clean && rm -rf node_modules"
+    "typecheck": "pnpm -r run typecheck",
+    "clean": "pnpm -r run clean; rimraf node_modules"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
@@ -39,10 +39,5 @@
   },
   "dependencies": {
     "@modyfi/vite-plugin-yaml": "^1.1.1"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild"
-    ]
   }
 }

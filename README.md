@@ -90,18 +90,69 @@
 
 ## CLI 命令行工具
 
-最简单的使用方式，无需配置 MCP，安装即用：
+最简单的使用方式，无需配置 MCP，复制粘贴即可上手。
+
+### 安装 CLI（二选一）
+
+#### 方式 A：全局安装（推荐）
 
 ```bash
 npm install -g @wechatsync/cli
 ```
 
-需要先安装 Chrome 扩展并在扩展设置中启用「MCP 连接」获取 Token，然后：
+安装后 `wechatsync` 会在 `PATH` 中可用，全局生效。
+
+#### 方式 B：本地构建直接调用（适合二次开发 / 离线）
+
+如果你不想全局安装，可以 clone 仓库本地构建后用 `node` 直接调用。
+
+**1. 克隆并构建**
 
 ```bash
-export WECHATSYNC_TOKEN="你的token"
+git clone https://github.com/wechatsync/Wechatsync.git
+cd Wechatsync
+pnpm install
+pnpm --filter @wechatsync/cli build
+```
 
-# 同步文章到多个平台
+**2. 直接调用（Windows PowerShell 示例）**
+
+```powershell
+# 把 ./test/mechanical-keyboard-review-2026.md 同步到微博和什么值得买
+# 也可以使用仓库自带的模板：./test/mechanical-keyboard-review-2026.md
+node .\packages\cli\dist\index.js sync .\test\mechanical-keyboard-review-2026.md -p "weibo,smzdm"
+```
+
+> 更多参数（`-t` 自定义标题、`--cover` 封面图、`--timeout` 超时等）见 [packages/cli/README.md](packages/cli/README.md)。
+
+### 设置 Token
+
+在 Chrome 扩展的「MCP 连接」设置里拿到 Token 后，设置到环境变量。三种写法按平台选其一即可：
+
+```bash
+# macOS / Linux（bash / zsh）
+export WECHATSYNC_TOKEN="你的token"
+```
+
+```cmd
+:: Windows CMD（仅当前窗口生效）
+set WECHATSYNC_TOKEN=你的token
+```
+
+```powershell
+# Windows PowerShell（仅当前会话生效）
+$env:WECHATSYNC_TOKEN = "你的token"
+```
+
+> 永久生效：
+> - macOS / Linux：写入 `~/.zshrc` 或 `~/.bashrc`。
+> - Windows CMD：`setx WECHATSYNC_TOKEN "你的token"`（写用户环境变量，新开窗口生效）。
+> - Windows PowerShell：`setx WECHATSYNC_TOKEN "你的token"` 或 `[Environment]::SetEnvironmentVariable("WECHATSYNC_TOKEN","你的token","User")`。
+
+### 同步文章
+
+```bash
+# 同步文章到多个平台（全局安装时）
 wechatsync sync article.md -p zhihu,juejin,csdn
 
 # 查看平台登录状态
@@ -110,6 +161,8 @@ wechatsync platforms --auth
 # 从浏览器当前页面提取文章
 wechatsync extract -o article.md
 ```
+
+> 更多参数（`-t` 自定义标题、`--cover` 封面图、`--timeout` 连接超时等）见 [packages/cli/README.md](packages/cli/README.md)。
 
 ### Claude Code Skill 集成
 
@@ -131,6 +184,158 @@ clawhub install lljxx1/wechatsync
 ```
 
 详细文档见 [packages/cli/README.md](packages/cli/README.md)
+
+## MCP Server 直接调用（无 AI 客户端）
+
+如果你不想用任何 AI 客户端（Claude Desktop / Claude Code），希望直接在 **Windows CMD / PowerShell / 脚本** 中通过 MCP 协议同步文章，可以直接启动 MCP Server 并通过 HTTP API 调用 —— 这就是 WechatSync 的「无头（headless）」用法。
+
+> 如果你只是想在命令行同步文章，不需要暴露 HTTP API，请直接看上一节 [CLI 命令行工具](#cli-命令行工具)。
+
+### 架构
+
+```
+┌─────────────┐     HTTP / stdio     ┌────────────────┐    WebSocket    ┌──────────────┐
+│  CMD 脚本    │ ◄─────────────────► │  MCP Server    │ ◄─────────────► │ Chrome 扩展   │
+│  PowerShell │   http://:9528/sse   │ (Node.js)      │    ws://:9527   │  (登录态)    │
+└─────────────┘                      └────────────────┘                 └──────────────┘
+```
+
+CLI 与 MCP Server 都基于同一套 `ExtensionBridge`（MCP 桥接）与扩展通信，区别只是 CLI 内置命令解析、MCP Server 暴露 HTTP API。
+
+### 方式一：直接启动 MCP Server（SSE 模式）
+
+适合用 `curl` / PowerShell / Python / 批处理 自己调度 MCP 调用。
+
+**第一步：构建 MCP Server**
+
+```bash
+git clone https://github.com/wechatsync/Wechatsync.git
+cd Wechatsync
+pnpm install
+pnpm build
+```
+
+**第二步：启动 MCP Server**
+
+新开一个 CMD / PowerShell 窗口（保持运行）：
+
+```cmd
+cd /d E:\git\Wechatsync
+
+:: 设置与 Chrome 扩展一致的 Token
+set MCP_TOKEN=your-secret-token-here
+
+:: 启动 MCP Server，监听 http://localhost:9528
+node packages\mcp-server\dist\index.js --sse
+```
+
+启动成功会看到：
+
+```
+[MCP] Sync Assistant started (SSE mode)
+[MCP] HTTP Server: http://localhost:9528
+[MCP] Claude Code: http://localhost:9528/sse
+[MCP] Extension WebSocket: ws://localhost:9527
+```
+
+`--sse` 不加时默认是 **stdio 模式**，专门用于被 Claude Code / Claude Desktop 这种 stdio 客户端拉起；SSE 模式则暴露 HTTP API，供 CMD / 脚本调用。
+
+**第三步：在另一个 CMD 窗口调用 HTTP API**
+
+健康检查：
+
+```cmd
+curl http://localhost:9528/health
+```
+
+列出平台与登录状态：
+
+```cmd
+curl -X POST http://localhost:9528/request ^
+  -H "Content-Type: application/json" ^
+  -d "{\"method\":\"listPlatforms\",\"params\":{\"forceRefresh\":true}}"
+```
+
+同步文章到知乎 + 掘金（`syncArticle`）：
+
+```cmd
+curl -X POST http://localhost:9528/request ^
+  -H "Content-Type: application/json" ^
+  -d "{\"method\":\"syncArticle\",\"params\":{\"platforms\":[\"zhihu\",\"juejin\"],\"article\":{\"title\":\"我的文章\",\"markdown\":\"## 标题\\n\\n这是正文内容\"}}}"
+```
+
+从浏览器当前页提取文章（`extractArticle`）：
+
+```cmd
+curl -X POST http://localhost:9528/request ^
+  -H "Content-Type: application/json" ^
+  -d "{\"method\":\"extractArticle\",\"params\":{}}"
+```
+
+> **Windows CMD 注意事项**
+> - 多行续行使用 `^`（不是 Linux 的 `\`）。
+> - JSON 里的 `"` 需要用 `\"` 转义；`\n` 需要写成 `\\n`。
+> - 如果没有 `curl`，Windows 10 1607+ 自带；更老系统可改用 PowerShell 的 `Invoke-RestMethod`。
+
+### 方式二：PowerShell 一键脚本
+
+保存为 `sync.ps1`，在 CMD 下 `powershell -ExecutionPolicy Bypass -File sync.ps1` 即可：
+
+```powershell
+$ErrorActionPreference = "Stop"
+$env:MCP_TOKEN = "your-secret-token-here"
+
+# 1. 后台启动 MCP Server
+$proc = Start-Process -FilePath "node" `
+    -ArgumentList "packages\mcp-server\dist\index.js","--sse" `
+    -WorkingDirectory "E:\git\Wechatsync" `
+    -PassThru -NoNewWindow
+
+try {
+    # 2. 等扩展连上
+    Start-Sleep -Seconds 5
+
+    # 3. 调用 HTTP API 同步
+    $body = @{
+        method = "syncArticle"
+        params = @{
+            platforms = @("zhihu","juejin")
+            article   = @{
+                title    = "我的文章"
+                markdown = "## 标题`n`n这是正文..."
+            }
+        }
+    } | ConvertTo-Json -Depth 10
+
+    Invoke-RestMethod -Method Post `
+        -Uri "http://localhost:9528/request" `
+        -ContentType "application/json" `
+        -Body $body
+}
+finally {
+    # 4. 清理
+    if ($proc -and -not $proc.HasExited) { Stop-Process -Id $proc.Id }
+}
+```
+
+### 环境变量
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `MCP_TOKEN` / `WECHATSYNC_TOKEN` | 安全 Token（任选一个），必须与 Chrome 扩展中设置的一致 | - |
+| `SYNC_WS_PORT` | Extension WebSocket 端口 | 9527 |
+| `SYNC_HTTP_PORT` | MCP Server HTTP 端口（SSE 模式） | 9528 |
+| `SYNC_PORT_START` / `SYNC_PORT_END` | 多端口模式端口范围 | 9527~9560 |
+| `SYNC_SSE_HTTP_PORT` | SSE 监听端口（多端口模式下默认 = WS_PORT_END + 2） | 9528 |
+
+> CMD 中 `set` 只对当前窗口有效；要永久生效用 `setx MCP_TOKEN "your-token"`（需新开 CMD 窗口）。
+
+### 常见错误
+
+- **「Token mismatch」** — CMD 里的 `MCP_TOKEN` 与 Chrome 扩展中的 Token 不完全一致（大小写、空格都会算）。
+- **「Extension not connected」** — Chrome 浏览器需要打开，扩展已启用「MCP 连接」开关。
+- **「Port 9527 in use」** — 已有进程占用，使用 `set SYNC_WS_PORT=9600` 换一个端口，同时到扩展设置里把「服务器地址」改成 `ws://localhost:9600`。
+- **curl 报 `'{"method"...}' 不是有效 JSON`** — 大概率是 `\"` 没写对，CMD 下 JSON 字符串必须把每个 `"` 转义为 `\"`，把 `\n` 写成 `\\n`。
 
 ## Claude Code / Claude Desktop 集成 (Anthropic MCP)
 
@@ -272,6 +477,14 @@ pnpm build
 **Q: 这是什么工具？**
 
 文章同步助手是一款开源免费的 Chrome 浏览器扩展，帮助自媒体作者、博主、内容创作者将文章一键同步到多个平台，避免重复复制粘贴，是自媒体运营必备的多平台发文工具。
+
+**Q: Token 从哪里获取？怎么设置？**
+
+在 Chrome 扩展的「设置 / MCP 连接」面板里自定义一个 Token（如 `my-secret-123`），然后按你的系统设到环境变量里，变量名用 `WECHATSYNC_TOKEN` 或 `MCP_TOKEN` 任选一个都行；最终要和 Chrome 扩展里填的完全一致。详细三种平台写法看 [设置 Token](#设置-token)。
+
+**Q: 「Extension not connected」怎么办？**
+
+依次检查：① Chrome 浏览器是否开着；② 扩展是否启用了「MCP 连接」开关；③ Token 两边是否完全一致；④ 端口是否被占用（可调 `SYNC_WS_PORT`）。
 
 **Q: 支持同步微信公众号文章吗？**
 

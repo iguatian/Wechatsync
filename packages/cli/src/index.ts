@@ -115,6 +115,31 @@ const MIME_TYPES: Record<string, string> = {
 }
 
 /**
+ * Article-scoped 平台：图片上传接口必须先创建文章/文档才能工作
+ * （如 smzdm 的 /api/images/upload/local 需要 article_id，yuque 的
+ *  /api/upload/attach 需要 attachable_id）。CLI 在 publish 之前单独
+ * 上传本地图片时这些平台会失败，因此不能作为独立图床使用。
+ */
+const ARTICLE_SCOPED_HOSTS = new Set(['smzdm', 'yuque'])
+
+/**
+ * 默认图床：通用图床，图片上传接口不依赖具体文章上下文
+ */
+const DEFAULT_IMAGE_HOST = 'weibo'
+
+/**
+ * 智能选择图片图床
+ * 当首选平台是 article-scoped 时，自动降级到默认图床，避免在
+ * publish 之前上传图片失败导致最终草稿里图片引用仍是本地路径。
+ */
+function resolveImageHost(preferred: string): { host: string; downgraded: boolean } {
+  if (!ARTICLE_SCOPED_HOSTS.has(preferred)) {
+    return { host: preferred, downgraded: false }
+  }
+  return { host: DEFAULT_IMAGE_HOST, downgraded: true }
+}
+
+/**
  * 查找内容中的本地图片引用
  */
 function findLocalImages(content: string, basePath: string): LocalImage[] {
@@ -287,9 +312,9 @@ interface ParsedContent {
   title: string | null
   content: string
   format: 'markdown' | 'html'
-  /** 从 HTML meta 提取的封面图 */
+  /** 封面图：HTML 从 <meta og:image>，Markdown 从 YAML front matter 的 cover 字段 */
   cover?: string
-  /** 从 HTML meta 提取的摘要 */
+  /** 摘要：HTML 从 <meta description>，Markdown 从 YAML front matter 的 summary 字段 */
   summary?: string
 }
 
@@ -320,6 +345,8 @@ function parseFileContent(filePath: string): ParsedContent {
 function parseMarkdown(content: string): ParsedContent {
   let title: string | null = null
   let body = content
+  let cover: string | undefined
+  let summary: string | undefined
 
   // 1. 尝试从 YAML front matter 提取
   const yamlMatch = content.match(/^---\s*\n([\s\S]*?)\n---\s*\n/)
@@ -328,6 +355,20 @@ function parseMarkdown(content: string): ParsedContent {
     const titleMatch = frontMatter.match(/^title:\s*["']?(.+?)["']?\s*$/m)
     if (titleMatch) {
       title = titleMatch[1].trim()
+    }
+    // 封面图：兼容 Hugo/Hexo/Jekyll 常见的 cover 字段名
+    const coverMatch = frontMatter.match(/^cover:\s*["']?(.+?)["']?\s*$/m)
+      || frontMatter.match(/^image:\s*["']?(.+?)["']?\s*$/m)
+      || frontMatter.match(/^thumbnail:\s*["']?(.+?)["']?\s*$/m)
+    if (coverMatch) {
+      cover = coverMatch[1].trim()
+    }
+    // 摘要：兼容 summary / description / excerpt
+    const summaryMatch = frontMatter.match(/^summary:\s*["']?(.+?)["']?\s*$/m)
+      || frontMatter.match(/^description:\s*["']?(.+?)["']?\s*$/m)
+      || frontMatter.match(/^excerpt:\s*["']?(.+?)["']?\s*$/m)
+    if (summaryMatch) {
+      summary = summaryMatch[1].trim()
     }
     // 移除 front matter
     body = content.slice(yamlMatch[0].length)
@@ -355,6 +396,8 @@ function parseMarkdown(content: string): ParsedContent {
     title,
     content: body,
     format: 'markdown',
+    cover,
+    summary,
   }
 }
 
@@ -552,7 +595,7 @@ async function detectPortProcess(port: number): Promise<string | null> {
  * 创建并连接 Bridge
  */
 async function createBridge(): Promise<ExtensionBridge | null> {
-  const bridge = new ExtensionBridge(WS_PORT, { silent: true })
+  const bridge = new ExtensionBridge(WS_PORT, undefined, { silent: true })
   const timeout = connectionTimeout
 
   // 注册信号处理，确保进程退出时释放端口
@@ -652,12 +695,19 @@ program
       process.exit(1)
     }
 
-    // 处理封面图（优先使用命令行参数，回退到 HTML meta）
+    // 处理封面图（优先使用命令行参数，回退到 YAML front matter / HTML meta）
     let cover = options.cover || parsed.cover
     if (cover && !cover.startsWith('http') && !cover.startsWith('data:')) {
-      // 本地文件，转为 base64
-      const coverPath = path.resolve(cover)
-      if (fs.existsSync(coverPath)) {
+      // 本地文件，转为 base64。相对路径优先相对于 markdown 文件所在目录，
+      // 这样 YAML 里的 `cover: ./cover.png` 能在不同 cwd 下都正常工作；
+      // 若该文件不存在，再尝试相对于当前工作目录。
+      const fileDir = path.dirname(filePath)
+      const candidatePaths = [
+        path.isAbsolute(cover) ? cover : path.resolve(fileDir, cover),
+        path.resolve(cover),
+      ]
+      const coverPath = candidatePaths.find((p) => fs.existsSync(p))
+      if (coverPath) {
         const coverBuffer = fs.readFileSync(coverPath)
         const ext = path.extname(coverPath).toLowerCase()
         const mimeTypes: Record<string, string> = {
@@ -670,7 +720,7 @@ program
         const mimeType = mimeTypes[ext] || 'image/png'
         cover = `data:${mimeType};base64,${coverBuffer.toString('base64')}`
       } else {
-        console.error(chalk.red(`封面图文件不存在: ${coverPath}`))
+        console.error(chalk.red(`封面图文件不存在: ${cover}（尝试路径: ${candidatePaths.join(' / ')}）`))
         process.exit(1)
       }
     }
@@ -693,8 +743,23 @@ program
     }
     console.log()
 
+    // 处理本地图片：扫描（dry-run 与实际同步都共用）
+    const fileDir = path.dirname(filePath)
+    const localImages = findLocalImages(parsed.content, fileDir)
+
     if (options.dryRun) {
       console.log(chalk.yellow('(dry-run 模式，不实际同步)'))
+
+      // dry-run 也提示图床选择（特别是 article-scoped 平台会降级），让用户预知行为
+      if (localImages.length > 0) {
+        const { host: imageHostDry, downgraded: downgradedDry } = resolveImageHost(platforms[0])
+        console.log()
+        console.log(
+          chalk.bold(`计划上传 ${localImages.length} 张本地图片到 ${imageHostDry}`) +
+          (downgradedDry ? chalk.gray(` (${platforms[0]} 需先创建文章，自动降级)`) : '')
+        )
+      }
+
       console.log()
       console.log(chalk.bold('内容预览:'))
       console.log(chalk.gray(parsed.content.slice(0, 300) + (parsed.content.length > 300 ? '...' : '')))
@@ -706,39 +771,78 @@ program
       process.exit(1)
     }
 
-    // 处理本地图片：上传到第一个目标平台作为图床
-    const fileDir = path.dirname(filePath)
-    const localImages = findLocalImages(parsed.content, fileDir)
-
     let processedMarkdown = markdown
     let processedHtml = html
 
     if (localImages.length > 0) {
-      // 使用第一个目标平台作为图床
-      const imageHost = platforms[0]
-      console.log(chalk.bold(`发现 ${localImages.length} 张本地图片，上传到 ${imageHost}...`))
-      console.log()
+      // 智能选择图片处理策略：
+      // - 当目标平台包含 article-scoped 平台（smzdm, yuque 等）时，不能用统一的
+      //   默认图床：smzdm 适配器内部下载外站（weibo）URL 在 Service Worker 中
+      //   很可能失败（CORS / 防盗链），且失败会被 processImages 静默吞掉，
+      //   导致草稿里保留 weibo URL，smzdm 编辑器无法显示。
+      //   此时直接把图片转 data URI 嵌入内容，让各平台适配器用各自的上传接口
+      //   把图片存到目标平台图床，从根本上避免跨图床下载。
+      // - 否则维持原有行为：上传到默认图床（通常是 weibo），其他平台从该图床转存。
+      const hasArticleScopedTarget = platforms.some((p: string) => ARTICLE_SCOPED_HOSTS.has(p))
 
-      const imageResult = await processLocalImages(parsed.content, fileDir, bridge, imageHost)
+      if (hasArticleScopedTarget) {
+        console.log(
+          chalk.bold(`发现 ${localImages.length} 张本地图片，转为内嵌 data URI`) +
+          chalk.gray(` (含 article-scoped 平台，避免跨图床下载失败)`)
+        )
+        console.log()
 
-      if (imageResult.uploadedCount > 0) {
-        // 更新内容
-        if (parsed.format === 'markdown') {
-          processedMarkdown = imageResult.content
-          processedHtml = markdownToHtml(imageResult.content)
-        } else {
-          processedHtml = imageResult.content
+        const dataUriResult = convertImagesToDataUri(parsed.content, fileDir)
+
+        if (dataUriResult.convertedCount > 0) {
+          if (parsed.format === 'markdown') {
+            processedMarkdown = dataUriResult.content
+            processedHtml = markdownToHtml(dataUriResult.content)
+          } else {
+            processedHtml = dataUriResult.content
+          }
         }
-      }
 
-      console.log()
-      console.log(
-        `图片上传完成: ${chalk.green(imageResult.uploadedCount + ' 成功')}, ${chalk.red(imageResult.failedCount + ' 失败')}`
-      )
-      if (platforms.length > 1) {
-        console.log(chalk.gray(`(其他平台将从 ${imageHost} 图床转存)`))
+        console.log()
+        console.log(
+          `图片转换完成: ${chalk.green(dataUriResult.convertedCount + ' 成功')}, ${chalk.red(dataUriResult.failedCount + ' 失败')}`
+        )
+        console.log(chalk.gray(`(将交由各平台适配器上传到对应图床)`))
+        console.log()
+      } else {
+        // 智能选择图床：当目标是 article-scoped 平台（必须 article_id 才能上传）
+        // 时，自动降级到默认图床（weibo），避免 publish 之前上传失败导致最终
+        // 草稿里图片引用仍是本地路径。
+        const { host: imageHost, downgraded } = resolveImageHost(platforms[0])
+        console.log(chalk.bold(`发现 ${localImages.length} 张本地图片，上传到 ${imageHost}...`))
+        if (downgraded) {
+          console.log(
+            chalk.gray(`  (${platforms[0]} 图片上传必须先创建文章，已自动改用 ${imageHost} 作为图床)`)
+          )
+        }
+        console.log()
+
+        const imageResult = await processLocalImages(parsed.content, fileDir, bridge, imageHost)
+
+        if (imageResult.uploadedCount > 0) {
+          // 更新内容
+          if (parsed.format === 'markdown') {
+            processedMarkdown = imageResult.content
+            processedHtml = markdownToHtml(imageResult.content)
+          } else {
+            processedHtml = imageResult.content
+          }
+        }
+
+        console.log()
+        console.log(
+          `图片上传完成: ${chalk.green(imageResult.uploadedCount + ' 成功')}, ${chalk.red(imageResult.failedCount + ' 失败')}`
+        )
+        if (platforms.length > 1) {
+          console.log(chalk.gray(`(其他平台将从 ${imageHost} 图床转存)`))
+        }
+        console.log()
       }
-      console.log()
     }
 
     const syncSpinner = ora('正在同步...').start()

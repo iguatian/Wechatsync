@@ -162,6 +162,23 @@ chrome.runtime.onMessage.addListener((message: MessageAction, sender, sendRespon
   return true // 异步响应
 })
 
+/**
+ * smzdm 封面裁剪诊断：MAIN world 代码通过 chrome.runtime.sendMessage 回传 fetch
+ * 生命周期日志（crop_script_started / crop_form_built / crop_fetch_invoking /
+ * crop_fetch_returned / crop_fetch_threw / crop_outer_threw），
+ * 这里将其打印到 Service Worker console，方便排查“为什么 fetch/xhr 面板看不到 crop 请求”。
+ */
+chrome.runtime.onMessage.addListener((message: any, _sender: chrome.runtime.MessageSender) => {
+  if (message?.type === 'SMZDM_CROP_DIAG') {
+    // eslint-disable-next-line no-console
+    console.log(
+      `[SmzdmCropDiag] [tab=${message.tabId}] ${message.event}`,
+      message.payload,
+    )
+    // 不返回 true：不阻塞其他 listener，也不期望收到 sendResponse
+  }
+})
+
 async function handleMessage(message: MessageAction, sender?: chrome.runtime.MessageSender) {
   switch (message.type) {
     case 'GET_PLATFORMS': {
@@ -615,12 +632,13 @@ async function handleMessage(message: MessageAction, sender?: chrome.runtime.Mes
 
     case 'MCP_ENABLE': {
       // 检查是否已有 token，没有则使用默认值
-      const storage = await chrome.storage.local.get(['mcpToken'])
+      const storage = await chrome.storage.local.get(['mcpToken', 'mcpServerUrl'])
       const token = storage.mcpToken || DEFAULT_MCP_TOKEN
       await chrome.storage.local.set({ mcpEnabled: true, mcpToken: token })
-      // 设置 token、服务器地址并启动客户端（服务器地址始终使用默认值，避免 storage 旧值覆盖）
+      // 设置 token、服务器地址并启动客户端
+      // 优先使用 storage 里的自定义地址；缺失才回落到默认值
       mcpClient.setToken(token)
-      mcpClient.setServerUrl(DEFAULT_SERVER_URL)
+      mcpClient.setServerUrl(storage.mcpServerUrl || DEFAULT_SERVER_URL)
       startMcpClient()
       logger.info(' MCP enabled')
       trackMcpUsage('enable').catch(() => {})

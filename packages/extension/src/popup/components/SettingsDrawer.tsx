@@ -45,7 +45,7 @@ export function SettingsDrawer({ open, onClose }: SettingsDrawerProps) {
           token: response.token,
           serverUrl: response.serverUrl,
         })
-        setServerUrlInput(response.serverUrl || 'ws://182.92.84.67:9529')
+        setServerUrlInput(response.serverUrl ?? '')
         setTokenInput(response.token || '')
       }
     })

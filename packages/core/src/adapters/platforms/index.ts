@@ -29,5 +29,6 @@ export { ToutiaoAdapter } from './toutiao'
 export { SohuFocusAdapter } from './sohufocus'
 export { YidianAdapter } from './yidian'
 export { DouyinAdapter } from './douyin'
-export { XiaohongshuAdapter } from './xiaohongshu'
-export { XAdapter } from './x'
+// FIXME: 适配器文件尚未实现，临时注释以通过构建
+// export { XiaohongshuAdapter } from './xiaohongshu'
+// export { XAdapter } from './x'
