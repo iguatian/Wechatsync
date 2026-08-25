@@ -26,7 +26,9 @@ export class ExtensionRuntime implements RuntimeInterface {
     try {
       const response = await fetch(url, {
         ...options,
-        credentials: 'include',
+        // 允许调用方通过 options.credentials 覆盖（如 imagex 上传请求需 omit，
+        // 模拟页面 cross-origin fetch 默认不带 cookie），默认保持 include
+        credentials: options?.credentials ?? 'include',
         signal: controller.signal,
       })
       return response
