@@ -30,6 +30,6 @@ export { SohuFocusAdapter } from './sohufocus'
 export { YidianAdapter } from './yidian'
 export { DouyinAdapter } from './douyin'
 export { QQContentAdapter } from './qq-content'
+export { XiaohongshuAdapter } from './xiaohongshu'
 // FIXME: 适配器文件尚未实现，临时注释以通过构建
-// export { XiaohongshuAdapter } from './xiaohongshu'
 // export { XAdapter } from './x'

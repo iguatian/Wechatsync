@@ -56,7 +56,7 @@
 | 微信公众号 | weixin | 主流自媒体 | ✅ |
 | 知乎 | zhihu | 主流自媒体 | ✅ |
 | 微博 | weibo | 主流自媒体 | ✅ |
-| 小红书 | xiaohongshu | 主流自媒体 | ✅ |
+| 小红书 | xiaohongshu | 主流自媒体 | ✅ 🆕 |
 | 掘金 | juejin | 技术社区 | ✅ |
 | CSDN | csdn | 技术社区 | ✅ |
 | 简书 | jianshu | 通用 | ✅ |
