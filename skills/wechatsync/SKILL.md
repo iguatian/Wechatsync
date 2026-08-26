@@ -19,7 +19,7 @@ metadata:
 
 # WechatSync
 
-Publish and sync Markdown/HTML articles to 29+ content platforms via CLI.
+Publish and sync Markdown/HTML articles to 30+ content platforms via CLI.
 
 ## Prerequisites
 
@@ -63,7 +63,7 @@ wechatsync extract -o article.md  # save to file
 
 ## Platform IDs
 
-zhihu, juejin, csdn, jianshu, toutiao, douyin, weibo, bilibili, xiaohongshu, baijiahao, weixin, yuque, douban, sohu, xueqiu, woshipm, dayu, yidian, 51cto, sohufocus, imooc, oschina, segmentfault, cnblogs, x, eastmoney, smzdm, netease, wordpress, typecho
+zhihu, juejin, csdn, jianshu, toutiao, douyin, qq-content, weibo, bilibili, xiaohongshu, baijiahao, weixin, yuque, douban, sohu, xueqiu, woshipm, dayu, yidian, 51cto, sohufocus, imooc, oschina, segmentfault, cnblogs, x, eastmoney, smzdm, netease, wordpress, typecho
 
 ## Notes
 

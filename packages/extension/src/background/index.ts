@@ -1175,10 +1175,10 @@ chrome.runtime.onInstalled.addListener(async details => {
       showChangelogVersions.includes(currentVersion) ||
       (previousVersion.startsWith('1.') && currentVersion.startsWith('2.'))
     ) {
-      chrome.tabs.create({
-        url: 'https://www.wechatsync.com/changelog?from=' + previousVersion + '&to=' + currentVersion,
-        active: true,
-      })
+      // chrome.tabs.create({
+      //   url: 'https://www.wechatsync.com/changelog?from=' + previousVersion + '&to=' + currentVersion,
+      //   active: true,
+      // })
     }
   }
 

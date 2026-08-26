@@ -51,6 +51,7 @@ import {
   SohuFocusAdapter,
   YidianAdapter,
   DouyinAdapter,
+  QQContentAdapter,
   // FIXME: 适配器文件尚未实现，临时注释以通过构建
   // XiaohongshuAdapter,
   // XAdapter,
@@ -116,6 +117,7 @@ const ADAPTER_CLASSES: AdapterConstructor[] = [
   SohuFocusAdapter,
   YidianAdapter,
   DouyinAdapter,
+  QQContentAdapter,
   // FIXME: 适配器文件尚未实现，临时注释以通过构建
   // XiaohongshuAdapter,
   // XAdapter,
