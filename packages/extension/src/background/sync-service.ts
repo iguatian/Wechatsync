@@ -37,6 +37,8 @@ interface ActiveSyncState {
   article: {
     title: string
     cover?: string
+    coverHorizontal?: string
+    coverVertical?: string
     content?: string
     html?: string
     markdown?: string
@@ -52,6 +54,8 @@ interface SyncHistoryItem {
   status: SyncHistoryStatus
   title: string
   cover?: string
+  coverHorizontal?: string
+  coverVertical?: string
   platforms: string[]
   results: SyncResult[]
   startTime: number
@@ -150,7 +154,7 @@ async function saveSyncState(state: ActiveSyncState) {
  */
 async function createHistoryItem(
   syncId: string,
-  article: { title: string; cover?: string },
+  article: { title: string; cover?: string; coverHorizontal?: string; coverVertical?: string },
   platforms: string[]
 ): Promise<void> {
   try {
@@ -162,6 +166,8 @@ async function createHistoryItem(
       status: 'syncing',
       title: article.title || '未知文章',
       cover: article.cover,
+      coverHorizontal: article.coverHorizontal,
+      coverVertical: article.coverVertical,
       platforms,
       results: [],
       startTime: Date.now(),
@@ -228,6 +234,8 @@ export async function performSync(
     html?: string
     markdown?: string
     cover?: string
+    coverHorizontal?: string
+    coverVertical?: string
   },
   platforms: string[],
   options: SyncOptions = {},
@@ -247,6 +255,8 @@ export async function performSync(
     html: article.html || article.content || '',
     markdown: article.markdown || '',
     cover: article.cover,
+    coverHorizontal: article.coverHorizontal,
+    coverVertical: article.coverVertical,
   }
 
   // 获取 CMS 账户信息以区分 DSL 和 CMS
@@ -265,6 +275,8 @@ export async function performSync(
     article: {
       title: normalizedArticle.title,
       cover: normalizedArticle.cover,
+      coverHorizontal: normalizedArticle.coverHorizontal,
+      coverVertical: normalizedArticle.coverVertical,
       content: normalizedArticle.content,
       html: normalizedArticle.html,
       markdown: normalizedArticle.markdown,

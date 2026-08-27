@@ -312,8 +312,20 @@ interface ParsedContent {
   title: string | null
   content: string
   format: 'markdown' | 'html'
-  /** 封面图：HTML 从 <meta og:image>，Markdown 从 YAML front matter 的 cover 字段 */
+  /** 通用单封面图：HTML 从 <meta og:image>，Markdown 从 YAML front matter 的 cover 字段。多数平台使用。懂车帝等双封面平台会忽略。 */
   cover?: string
+  /**
+   * 横版封面（仅部分双封面平台需要，如懂车帝）。
+   * Markdown 从 YAML front matter 的 cover-horizontal 字段解析。懂车帝专用，
+   * 不与通用 cover 互通。
+   */
+  coverHorizontal?: string
+  /**
+   * 竖版封面（仅部分双封面平台需要，如懂车帝）。
+   * Markdown 从 YAML front matter 的 cover-vertical 字段解析。懂车帝专用，
+   * 不与通用 cover 互通。
+   */
+  coverVertical?: string
   /** 摘要：HTML 从 <meta description>，Markdown 从 YAML front matter 的 summary 字段 */
   summary?: string
 }
@@ -346,6 +358,8 @@ function parseMarkdown(content: string): ParsedContent {
   let title: string | null = null
   let body = content
   let cover: string | undefined
+  let coverHorizontal: string | undefined
+  let coverVertical: string | undefined
   let summary: string | undefined
 
   // 1. 尝试从 YAML front matter 提取
@@ -356,12 +370,32 @@ function parseMarkdown(content: string): ParsedContent {
     if (titleMatch) {
       title = titleMatch[1].trim()
     }
-    // 封面图：兼容 Hugo/Hexo/Jekyll 常见的 cover 字段名
+    // 通用封面图：兼容 Hugo/Hexo/Jekyll 常见的 cover 字段名
     const coverMatch = frontMatter.match(/^cover:\s*["']?(.+?)["']?\s*$/m)
       || frontMatter.match(/^image:\s*["']?(.+?)["']?\s*$/m)
       || frontMatter.match(/^thumbnail:\s*["']?(.+?)["']?\s*$/m)
     if (coverMatch) {
       cover = coverMatch[1].trim()
+    }
+    // 横版封面：懂车帝等双封面平台专用。
+    // 兼容 cover-horizontal（kebab-case，推荐）/cover_horizontal（snake_case）/coverHorizontal（camelCase）
+    const coverHorizontalMatch = frontMatter.match(/^cover-horizontal:\s*["']?(.+?)["']?\s*$/m)
+      || frontMatter.match(/^cover_horizontal:\s*["']?(.+?)["']?\s*$/m)
+      || frontMatter.match(/^coverHorizontal:\s*["']?(.+?)["']?\s*$/m)
+      || frontMatter.match(/^horizontal-cover:\s*["']?(.+?)["']?\s*$/m)
+      || frontMatter.match(/^horizontalCover:\s*["']?(.+?)["']?\s*$/m)
+    if (coverHorizontalMatch) {
+      coverHorizontal = coverHorizontalMatch[1].trim()
+    }
+    // 竖版封面：懂车帝等双封面平台专用。
+    // 兼容 cover-vertical（kebab-case，推荐）/cover_vertical（snake_case）/coverVertical（camelCase）
+    const coverVerticalMatch = frontMatter.match(/^cover-vertical:\s*["']?(.+?)["']?\s*$/m)
+      || frontMatter.match(/^cover_vertical:\s*["']?(.+?)["']?\s*$/m)
+      || frontMatter.match(/^coverVertical:\s*["']?(.+?)["']?\s*$/m)
+      || frontMatter.match(/^vertical-cover:\s*["']?(.+?)["']?\s*$/m)
+      || frontMatter.match(/^verticalCover:\s*["']?(.+?)["']?\s*$/m)
+    if (coverVerticalMatch) {
+      coverVertical = coverVerticalMatch[1].trim()
     }
     // 摘要：兼容 summary / description / excerpt
     const summaryMatch = frontMatter.match(/^summary:\s*["']?(.+?)["']?\s*$/m)
@@ -397,6 +431,8 @@ function parseMarkdown(content: string): ParsedContent {
     content: body,
     format: 'markdown',
     cover,
+    coverHorizontal,
+    coverVertical,
     summary,
   }
 }
@@ -426,6 +462,9 @@ function parseHtml(content: string, filePath?: string): ParsedContent {
 
   // 从 <meta> 标签提取封面和摘要
   let cover: string | undefined
+  // HTML 暂不支持横版/竖版封面声明，需要双封面的平台请用 Markdown + front matter
+  const coverHorizontal: string | undefined = undefined
+  const coverVertical: string | undefined = undefined
   let summary: string | undefined
   const ogImageMatch = content.match(/<meta\s[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["'][^>]*>/i)
     || content.match(/<meta\s[^>]*content=["']([^"']+)["'][^>]*property=["']og:image["'][^>]*>/i)
@@ -502,6 +541,8 @@ function parseHtml(content: string, filePath?: string): ParsedContent {
     content: body,
     format: 'html',
     cover,
+    coverHorizontal,
+    coverVertical,
     summary,
   }
 }
@@ -669,12 +710,53 @@ async function createBridge(): Promise<ExtensionBridge | null> {
 
 // ============ sync 命令 ============
 
+// ============ 封面辅助 ============
+
+/** 本地图片相对/绝对路径 → data URI（http(s)/data: 原样返回） */
+function resolveCoverToDataUri(
+  value: string | undefined,
+  fileDir: string,
+  fieldLabel: string,
+): string | undefined {
+  if (!value) return undefined
+  if (value.startsWith('http') || value.startsWith('data:')) return value
+
+  // 本地文件，转为 base64。相对路径优先相对于 markdown 文件所在目录，
+  // 这样 YAML 里的 `cover: ./cover.png` 能在不同 cwd 下都正常工作；
+  // 若该文件不存在，再尝试相对于当前工作目录。
+  const candidatePaths = [
+    path.isAbsolute(value) ? value : path.resolve(fileDir, value),
+    path.resolve(value),
+  ]
+  const imgPath = candidatePaths.find((p) => fs.existsSync(p))
+  if (!imgPath) {
+    console.error(
+      chalk.red(`${fieldLabel}文件不存在: ${value}（尝试路径: ${candidatePaths.join(' / ')}）`),
+    )
+    process.exit(1)
+  }
+
+  const buffer = fs.readFileSync(imgPath)
+  const ext = path.extname(imgPath).toLowerCase()
+  const mimeTypes: Record<string, string> = {
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+  }
+  const mimeType = mimeTypes[ext] || 'image/png'
+  return `data:${mimeType};base64,${buffer.toString('base64')}`
+}
+
 program
   .command('sync <file>')
   .description('同步 Markdown/HTML 文件到平台（HTML 文件可保留自定义排版样式）')
   .option('-p, --platforms <platforms>', '目标平台，逗号分隔', 'zhihu,juejin')
   .option('-t, --title <title>', '文章标题（默认从文件提取）')
-  .option('--cover <url>', '封面图 URL 或本地路径')
+  .option('--cover <url>', '通用封面图 URL 或本地路径（单封面平台使用，懂车帝等双封面平台忽略本字段）')
+  .option('--cover-horizontal <url>', '横版封面图 URL 或本地路径（懂车帝等双封面平台专用，其他平台忽略）')
+  .option('--cover-vertical <url>', '竖版封面图 URL 或本地路径（懂车帝等双封面平台专用，其他平台忽略）')
   .option('--dry-run', '仅显示将要执行的操作，不实际同步')
   .action(async (file: string, options) => {
     // 检查文件是否存在
@@ -696,34 +778,18 @@ program
     }
 
     // 处理封面图（优先使用命令行参数，回退到 YAML front matter / HTML meta）
-    let cover = options.cover || parsed.cover
-    if (cover && !cover.startsWith('http') && !cover.startsWith('data:')) {
-      // 本地文件，转为 base64。相对路径优先相对于 markdown 文件所在目录，
-      // 这样 YAML 里的 `cover: ./cover.png` 能在不同 cwd 下都正常工作；
-      // 若该文件不存在，再尝试相对于当前工作目录。
-      const fileDir = path.dirname(filePath)
-      const candidatePaths = [
-        path.isAbsolute(cover) ? cover : path.resolve(fileDir, cover),
-        path.resolve(cover),
-      ]
-      const coverPath = candidatePaths.find((p) => fs.existsSync(p))
-      if (coverPath) {
-        const coverBuffer = fs.readFileSync(coverPath)
-        const ext = path.extname(coverPath).toLowerCase()
-        const mimeTypes: Record<string, string> = {
-          '.png': 'image/png',
-          '.jpg': 'image/jpeg',
-          '.jpeg': 'image/jpeg',
-          '.gif': 'image/gif',
-          '.webp': 'image/webp',
-        }
-        const mimeType = mimeTypes[ext] || 'image/png'
-        cover = `data:${mimeType};base64,${coverBuffer.toString('base64')}`
-      } else {
-        console.error(chalk.red(`封面图文件不存在: ${cover}（尝试路径: ${candidatePaths.join(' / ')}）`))
-        process.exit(1)
-      }
-    }
+    const fileDir = path.dirname(filePath)
+    const cover = resolveCoverToDataUri(options.cover || parsed.cover, fileDir, '封面')
+    const coverHorizontal = resolveCoverToDataUri(
+      options.coverHorizontal || parsed.coverHorizontal,
+      fileDir,
+      '横版封面',
+    )
+    const coverVertical = resolveCoverToDataUri(
+      options.coverVertical || parsed.coverVertical,
+      fileDir,
+      '竖版封面',
+    )
 
     const platforms = options.platforms.split(',').map((p: string) => p.trim().toLowerCase())
 
@@ -741,10 +807,19 @@ program
     if (cover) {
       console.log(`  封面: ${chalk.cyan(cover.startsWith('data:') ? '(本地图片)' : cover)}`)
     }
+    if (coverHorizontal) {
+      console.log(`  横版封面: ${chalk.cyan(coverHorizontal.startsWith('data:') ? '(本地图片)' : coverHorizontal)}`)
+    }
+    if (coverVertical) {
+      console.log(`  竖版封面: ${chalk.cyan(coverVertical.startsWith('data:') ? '(本地图片)' : coverVertical)}`)
+    } else if (platforms.includes('dongchedi')) {
+      console.log(
+        chalk.yellow('  ⚠ 提醒：同步到懂车帝需要双封面（横版 + 竖版），但未提供竖版封面（cover-vertical / --cover-vertical）'),
+      )
+    }
     console.log()
 
     // 处理本地图片：扫描（dry-run 与实际同步都共用）
-    const fileDir = path.dirname(filePath)
     const localImages = findLocalImages(parsed.content, fileDir)
 
     if (options.dryRun) {
@@ -855,6 +930,8 @@ program
           markdown: processedMarkdown,
           content: processedHtml,
           cover,
+          coverHorizontal,
+          coverVertical,
         },
       })
 

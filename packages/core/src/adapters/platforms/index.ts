@@ -32,5 +32,6 @@ export { DouyinAdapter } from './douyin'
 export { QQContentAdapter } from './qq-content'
 export { XiaohongshuAdapter } from './xiaohongshu'
 export { AutohomeAdapter } from './autohome'
+export { DongchediAdapter } from './dongchedi'
 // FIXME: 适配器文件尚未实现，临时注释以通过构建
 // export { XAdapter } from './x'

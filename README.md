@@ -6,7 +6,7 @@
 
 **开源免费**的跨平台文章同步工具 | Chrome 浏览器扩展 | 自媒体内容分发神器
 
-一键同步微信公众号文章到知乎、头条、掘金、小红书、CSDN、腾讯内容开放平台、汽车之家 等 31+ 平台，支持 WordPress 等自建博客，告别重复复制粘贴。
+一键同步微信公众号文章到知乎、头条、掘金、小红书、CSDN、腾讯内容开放平台、汽车之家、懂车帝 等 32+ 平台，支持 WordPress 等自建博客，告别重复复制粘贴。
 
 > 🔥 支持 **Anthropic MCP 协议**，可在 Claude Desktop / Claude Code 中通过 AI 一键发布文章
 
@@ -30,7 +30,7 @@
 
 ## 功能特性
 
-- **一键批量发布**: 微信公众号文章同步到知乎、掘金、头条、CSDN、简书、微博、小红书、抖音、汽车之家等 30+ 自媒体平台
+- **一键批量发布**: 微信公众号文章同步到知乎、掘金、头条、CSDN、简书、微博、小红书、抖音、汽车之家、懂车帝等 31+ 自媒体平台
 - **网页转 Markdown**: 任意网页智能提取正文，自动过滤广告噪音，图片本地化，打包为 Markdown + 图片 ZIP 压缩包
 - **自建站支持**: WordPress、Typecho、博客园 (MetaWeblog API)
 - **智能提取**: 自动从网页提取文章标题、内容、封面图（基于 Safari 阅读模式）
@@ -49,7 +49,7 @@
 支持 Chrome / Edge / 360 / QQ 等 Chromium 内核浏览器
 
 
-## 支持 30+ 主流平台
+## 支持 31+ 主流平台
 
 | 平台 | ID | 类型 | 状态 |
 |-----|-----|-----|-----|
@@ -79,6 +79,7 @@
 | 博客园 | cnblogs | 技术社区 | ✅ |
 | 搜狐焦点 | sohufocus | 房产 | ✅ |
 | 汽车之家 | autohome | 汽车 | ✅ 🆕 |
+| 懂车帝 | dongchedi | 汽车 | ✅ 🆕 |
 | X (Twitter) | x | 海外 | ✅ |
 | 东方财富 | eastmoney | 财经 | ✅ |
 | 什么值得买 | smzdm | 通用 | ✅ |
@@ -89,6 +90,29 @@
 | Hugo | zip-download | 建站/CMS | ✅ 通过 Markdown 下载 |
 
 - [提交新平台请求](https://airtable.com/shrLSJMnTC2BlmP29)
+
+### 双封面平台（懂车帝）
+
+懂车帝是典型的双封面平台：信息流推荐位用 **横版**（4:3），图文详情页用 **竖版**（3:4），两者必须分别上传，不能复用同一张图。**懂车帝会忽略通用的 `cover` 字段**，必须用专门的 `cover-horizontal` + `cover-vertical`。
+
+```yaml
+---
+title: 我的文章
+cover: ./cover.png                   # 通用单封面（多数平台使用，懂车帝忽略）
+cover-horizontal: ./cover-horizontal.jpg  # 懂车帝横版
+cover-vertical: ./cover-vertical.jpg      # 懂车帝竖版
+---
+```
+
+CLI 也可以覆盖：
+
+```bash
+wechatsync sync article.md -p dongchedi \
+  --cover-horizontal ./cover-horizontal.jpg \
+  --cover-vertical ./cover-vertical.jpg
+```
+
+仅提供一个封面时，发布会报错并明确提示补齐；不会静默用同一张图当两张。
 
 ## CLI 命令行工具
 
@@ -125,7 +149,7 @@ pnpm --filter @wechatsync/cli build
 node .\packages\cli\dist\index.js sync .\test\mechanical-keyboard-review-2026.md -p "weibo,smzdm"
 ```
 
-> 更多参数（`-t` 自定义标题、`--cover` 封面图、`--timeout` 超时等）见 [packages/cli/README.md](packages/cli/README.md)。
+> 更多参数（`-t` 自定义标题、`--cover` 通用封面图、`--cover-horizontal` 横版封面图（懂车帝等双封面平台）、`--cover-vertical` 竖版封面图（懂车帝等双封面平台）、`--timeout` 超时等）见 [packages/cli/README.md](packages/cli/README.md)。
 
 ### 设置 Token
 
@@ -164,7 +188,7 @@ wechatsync platforms --auth
 wechatsync extract -o article.md
 ```
 
-> 更多参数（`-t` 自定义标题、`--cover` 封面图、`--timeout` 连接超时等）见 [packages/cli/README.md](packages/cli/README.md)。
+> 更多参数（`-t` 自定义标题、`--cover` 通用封面图、`--cover-horizontal` 横版封面图（懂车帝等双封面平台）、`--cover-vertical` 竖版封面图（懂车帝等双封面平台）、`--timeout` 连接超时等）见 [packages/cli/README.md](packages/cli/README.md)。
 
 ### Claude Code Skill 集成
 
@@ -426,6 +450,10 @@ pnpm build
 
 ## 更新日志
 
+### v2.1.1 (2026-08-27)
+
+- 🆕 新增懂车帝创作者平台适配器，要求 **横版 + 竖版双封面**（分别上传）。懂车帝忽略通用 `cover`，必须用专属字段 `cover-horizontal`（横版）+ `cover-vertical`（竖版），可在 CLI 用 `--cover-horizontal` / `--cover-vertical` 覆盖。少任一封面会发布失败，不会静默复用同一张图。
+
 ### v2.1.0 (2026-08-27)
 
 - 🆕 新增汽车之家（创作者中心）平台适配器，支持 BBS 发文同步为草稿（基于 Lexical 编辑器状态）
@@ -494,7 +522,7 @@ pnpm build
 
 **Q: 支持同步微信公众号文章吗？**
 
-支持。可以直接从微信公众号编辑器提取文章，一键同步到知乎、头条、掘金等 31+ 平台。支持公众号文章同步到头条号、公众号同步到知乎、微信文章同步到掘金等各种场景。
+支持。可以直接从微信公众号编辑器提取文章，一键同步到知乎、头条、掘金等 32+ 平台。支持公众号文章同步到头条号、公众号同步到知乎、微信文章同步到掘金等各种场景。
 
 **Q: 支持 AI 写作工具吗？**
 

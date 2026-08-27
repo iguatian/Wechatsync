@@ -337,21 +337,28 @@ export abstract class CodeAdapter implements PlatformAdapter {
 
   /**
    * Blob 转 data URI
+   *
+   * 实现说明：必须兼容 MV3 Service Worker 运行环境。
+   * Service Worker 没有 `FileReader`、`DOMParser`、`XMLHttpRequest` 等 DOM API，
+   * 因此不能像浏览器主线程那样使用 `FileReader.readAsDataURL`。
+   * 这里改用 `Blob.arrayBuffer() + btoa + String.fromCharCode` 自行拼出 data URI，
+   * 与 dongchedi 适配器里的 `blobToBase64` 思路一致，对 Service Worker 友好。
+   *
+   * 注意：分块处理是为了避免在超长字符串上调用 `String.fromCharCode.apply(null, bigArray)`
+   * 时触发栈溢出（参数展开超过 ~64K 会爆栈）。
    */
   protected async blobToDataUri(blob: Blob): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onload = () => {
-        const result = reader.result
-        if (typeof result === 'string') {
-          resolve(result)
-        } else {
-          reject(new Error('Failed to read blob as data URI'))
-        }
-      }
-      reader.onerror = () => reject(new Error('FileReader error'))
-      reader.readAsDataURL(blob)
-    })
+    const buffer = await blob.arrayBuffer()
+    const bytes = new Uint8Array(buffer)
+    const chunkSize = 0x8000
+    let binary = ''
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      const chunk = bytes.subarray(i, i + chunkSize)
+      binary += String.fromCharCode.apply(null, chunk as unknown as number[])
+    }
+    const base64 = btoa(binary)
+    const mime = blob.type || 'application/octet-stream'
+    return `data:${mime};base64,${base64}`
   }
 
   /**

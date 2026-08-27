@@ -10,7 +10,18 @@ export interface Article {
   markdown: string    // Markdown 格式内容（主要）
   html?: string       // 原始 HTML（可选，用于某些需要 HTML 的平台）
   summary?: string
+  /** 通用单封面图 URL/路径：大多数平台使用。懂车帝等双封面平台会忽略本字段。 */
   cover?: string
+  /**
+   * 竖版封面 URL/路径（仅部分双封面平台需要，如懂车帝）。
+   * 与 `coverHorizontal` 配套使用；缺失时适配器会明确报错，不会静默回退到 `cover`。
+   */
+  coverVertical?: string
+  /**
+   * 横版封面 URL/路径（仅部分双封面平台需要，如懂车帝）。
+   * 与 `coverVertical` 配套使用；缺失时适配器会明确报错，不会静默回退到 `cover`。
+   */
+  coverHorizontal?: string
   tags?: string[]
   category?: string
   source?: {
