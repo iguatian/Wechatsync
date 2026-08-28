@@ -55,6 +55,73 @@ const POST_ORIGIN = 'https://post.zol.com.cn'
 /** 文章创建/编辑页（HAR 抓包 referer） */
 const CREATE_PAGE = `${POST_ORIGIN}/v2/create/article`
 
+/**
+ * 草稿编辑页 URL 模板（保存草稿后返回该 URL，浏览器可直接打开该草稿进入编辑器）。
+ * 关键参数（对齐 ZOL 编辑器）：
+ *   draftId       — 保存草稿接口响应 data.draftId
+ *   businessType  — 1 = 图文（与保存草稿时填写的 businessType=1 一致）
+ *   editType      — 1 = 编辑模式
+ */
+function buildZolPostUrl(draftId: string | number): string {
+  return `${CREATE_PAGE}?draftId=${encodeURIComponent(String(draftId))}&businessType=1&editType=1`
+}
+
+/**
+ * 保存草稿表单字段（对齐最新抓包样本 post.zol.com-upload.cn.har）。
+ *
+ * 纯函数：字段定义唯一来源。Node 路径由 `buildDraftFormData` 直接调用；
+ * 页面路径在扩展上下文调用后，结果经 executeScript args 结构化克隆传入
+ * `saveDraftInTabScript`（脚本内禁止引用模块级函数，见该函数注释）。
+ */
+function buildZolDraftFields(payload: {
+  title: string
+  scontent: string
+  userId: string
+  guideImg: string
+  draftId?: string
+  draftUpdateId?: string
+}): Record<string, string> {
+  return {
+    businessType: '1',
+    scontent: payload.scontent,
+    title: payload.title,
+    stitle: '',
+    userId: payload.userId,
+    docType: '',
+    // HAR 样本：前端 v-model 默认值是 undefined，序列化时原样传字面量 'undefined'
+    isOriginal: 'undefined',
+    isContribution: '0',
+    dutyEditor: 'undefined',
+    publishDate: '',
+    subjectList: '',
+    subjectIdStr: '',
+    guideImg: payload.guideImg,
+    draftId: payload.draftId ?? '',
+    contentId: '',
+    tryId: '',
+    goodsList: '',
+    subjectNameStr: '',
+    eosXuanti: '0',
+    eosDawen: '0',
+    eosUser: '0',
+    eosTeyue: '0',
+    // HAR 样本：原样传字面量 'undefined'
+    firstEc: 'undefined',
+    isTouTiao: 'undefined',
+    noComment: 'undefined',
+    firstEcForm: 'false',
+    isToutiaoForm: 'false',
+    noCommentForm: 'false',
+    // HAR 样本：原样传字面量 '[]'，不是空串
+    geoList: '[]',
+    eosSyXuanti: '0',
+    eosGEO: '0',
+    eosZiZhu: '0',
+    saveType: '2',
+    draftUpdateId: payload.draftUpdateId ?? '',
+  }
+}
+
 /** 开放 API 基础地址 */
 const OPEN_API_BASE = 'https://open-api.zol.com.cn/api/v1'
 
@@ -66,9 +133,6 @@ const IMAGE_UPLOAD_URL = `${OPEN_API_BASE}/creator.content.image.upload`
 
 /** 保存草稿接口（multipart/form-data） */
 const DRAFT_SAVE_URL = `${OPEN_API_BASE}/creator.content.draft.save.orther`
-
-/** 解析 HTML 中 <img> 标签的正则 */
-const IMG_TAG_REGEX = /<img\b[^>]*>/gi
 
 /** 用户信息接口响应 */
 interface ZolUserInfoResp {
@@ -117,7 +181,7 @@ export class ZolAdapter extends CodeAdapter {
     name: '中关村在线',
     icon: 'https://www.zol.com.cn/favicon.ico',
     homepage: POST_ORIGIN,
-    capabilities: ['article', 'draft'],
+    capabilities: ['article', 'draft', 'cover'],
   }
 
   /** 预处理配置：编辑器接受 HTML 正文（与汽车之家/懂车帝一致） */
@@ -238,8 +302,10 @@ export class ZolAdapter extends CodeAdapter {
         { ok: boolean; notLoggedIn?: boolean; userId?: string; username?: string; error?: string },
         [string]
       >(tabId, fetchUserInfoInTabScript, [USER_INFO_URL])
-      if (!auth.ok || auth.notLoggedIn) {
-        throw new Error(auth.error || '未登录中关村在线创作者平台')
+      // MV3 executeScript 在某些边缘场景（页面未就绪、跨域 frame 等）会让 results[0].result 为 null。
+      // 统一加 null 保护，避免向外冒 TypeError。
+      if (!auth || !auth.ok || auth.notLoggedIn) {
+        throw new Error(auth?.error || '执行页面脚本未返回结果（中关村在线页面可能未加载完成，请重试）')
       }
       const userId = auth.userId
       if (!userId) {
@@ -257,8 +323,12 @@ export class ZolAdapter extends CodeAdapter {
         },
       )
 
-      // 3. 构造 guideImg JSON（文内图片列表，含宽高）
-      const guideImg = this.buildGuideImg(content)
+      // 3. 上传导读图（双封面：竖版 3:4 + 横版 4:3，顺序对齐 HAR）
+      //    ZOL 的 guideImg 是封面/导读图列表，与正文 <img> 独立。
+      //    - 竖版来源：article.coverVertical（专用字段）
+      //    - 横版来源：article.coverHorizontal（专用字段）
+      //    - 通用 cover 字段被忽略，与懂车帝互不干扰。
+      const guideImg = await this.uploadGuideImages(article)
 
       // 4. 页面上下文保存草稿
       const result = await runtimeTabs.executeScript<SaveDraftInTabResult, [SaveDraftInTabParams]>(
@@ -266,15 +336,18 @@ export class ZolAdapter extends CodeAdapter {
         saveDraftInTabScript,
         [{
           saveUrl: DRAFT_SAVE_URL,
-          title: article.title,
-          scontent: content,
-          userId,
-          guideImg: JSON.stringify(guideImg),
+          // 字段在扩展上下文生成（buildZolDraftFields），经结构化克隆传入页面脚本
+          fields: buildZolDraftFields({
+            title: article.title,
+            scontent: content,
+            userId,
+            guideImg, // uploadGuideImages 已返回 JSON 字符串，勿再 stringify
+          }),
         }],
       )
 
-      if (!result.ok) {
-        throw new Error(result.error || `保存草稿失败 (errcode=${result.errcode})`)
+      if (!result || !result.ok) {
+        throw new Error(result?.error || `保存草稿失败：页面脚本未返回结果（errcode=${result?.errcode}）`)
       }
 
       const draftId = result.draftId
@@ -285,7 +358,7 @@ export class ZolAdapter extends CodeAdapter {
       logger.info(`Draft saved: ${draftId}`)
       return this.createResult(true, {
         postId: draftId,
-        postUrl: CREATE_PAGE,
+        postUrl: buildZolPostUrl(draftId),
         draftOnly: options?.draftOnly ?? true,
         message: '已保存到中关村在线创作者平台草稿箱',
       })
@@ -297,12 +370,25 @@ export class ZolAdapter extends CodeAdapter {
   /**
    * Node 环境发布：直接 fetch（无 CORS 限制，显式携带 Origin/Referer 头）。
    * 与页面上下文路径共用 HEADER_RULES 的思路，但 Node fetch 可直接设置请求头。
+   *
+   * ZOL 后端要求自定义请求头 `zol_userid`（HAR OPTIONS 验证）：从浏览器 cookie 读出后
+   * 附加到所有 fetch 调用（getinfo / draft.save）。运行时通过 runtime.cookies.get 访问。
    */
   private async publishViaFetch(article: Article, options?: PublishOptions): Promise<SyncResult> {
     const baseHeaders: Record<string, string> = {
       Accept: 'application/json, text/plain, */*',
       Origin: POST_ORIGIN,
       Referer: CREATE_PAGE,
+    }
+    // 从浏览器/扩展桥接的 cookie 中取 zol_userid（不取则不带，依赖服务端兼容）。
+    try {
+      const cookies = await this.runtime.cookies.get('.post.zol.com.cn')
+      const zolUseridCookie = cookies.find((c) => c.name === 'zol_userid')
+      if (zolUseridCookie?.value) {
+        baseHeaders['zol_userid'] = zolUseridCookie.value
+      }
+    } catch {
+      // ignore: 没有 cookie 时不强报错（CLI 直连场景下没有 cookie 是预期）
     }
 
     try {
@@ -328,15 +414,15 @@ export class ZolAdapter extends CodeAdapter {
         },
       )
 
-      // 2. 构造 guideImg JSON
-      const guideImg = this.buildGuideImg(content)
+      // 2. 上传导读图（双封面：竖版 3:4 + 横版 4:3，顺序对齐 HAR）
+      const guideImg = await this.uploadGuideImages(article)
 
       // 3. 保存草稿（multipart/form-data）
       const formData = this.buildDraftFormData({
         title: article.title,
         scontent: content,
         userId,
-        guideImg: JSON.stringify(guideImg),
+        guideImg, // uploadGuideImages 已返回 JSON 字符串，勿再 stringify
       })
       const response = await this.runtime.fetch(DRAFT_SAVE_URL, {
         method: 'POST',
@@ -359,7 +445,7 @@ export class ZolAdapter extends CodeAdapter {
       logger.info(`Draft saved: ${draftId}`)
       return this.createResult(true, {
         postId: draftId,
-        postUrl: CREATE_PAGE,
+        postUrl: buildZolPostUrl(draftId),
         draftOnly: options?.draftOnly ?? true,
         message: '已保存到中关村在线创作者平台草稿箱',
       })
@@ -421,8 +507,8 @@ export class ZolAdapter extends CodeAdapter {
         mime,
       }])
 
-      if (!result.ok || !result.url) {
-        logger.warn('[Zol] 图片上传失败:', result.error)
+      if (!result || !result.ok || !result.url) {
+        logger.warn('[Zol] 图片上传失败:', result?.error, '页面脚本未返回结果' + (!result ? '(null)' : ''))
         return { url: src }
       }
 
@@ -455,8 +541,9 @@ export class ZolAdapter extends CodeAdapter {
       }
 
       const formData = new FormData()
-      // 抓包样本 filename 固定为 "blob"
+      // 抓包样本：multipart 必含 file + siteType(=0) 两个字段
       formData.append('file', blob, 'blob')
+      formData.append('siteType', '0')
 
       const response = await this.runtime.fetch(IMAGE_UPLOAD_URL, {
         method: 'POST',
@@ -499,71 +586,66 @@ export class ZolAdapter extends CodeAdapter {
 
   // ============ 表单构造 ============
 
-  /** 保存草稿表单字段（对齐抓包样本） */
+  /** 保存草稿表单字段（Node 环境）。调用文件顶层纯函数 buildZolDraftFields 保证字段定义唯一。 */
   private buildDraftFormData(payload: {
     title: string
     scontent: string
     userId: string
     guideImg: string
+    /** 当前草稿 draftId（首次保存为空字符串，更新时填写） */
+    draftId?: string
+    /** draftUpdateId：首次保存为空字符串，更新时与 draftId 同填 */
+    draftUpdateId?: string
   }): FormData {
     const formData = new FormData()
-    const fields: Record<string, string> = {
-      businessType: '1',
-      scontent: payload.scontent,
-      title: payload.title,
-      stitle: '',
-      userId: payload.userId,
-      docType: '',
-      isOriginal: '',
-      isContribution: '0',
-      dutyEditor: '',
-      publishDate: '',
-      subjectList: '',
-      subjectIdStr: '',
-      guideImg: payload.guideImg,
-      draftId: '',
-      contentId: '',
-      tryId: '',
-      goodsList: '',
-      subjectNameStr: '',
-      eosXuanti: '0',
-      eosDawen: '0',
-      eosUser: '0',
-      eosTeyue: '0',
-      firstEc: '0',
-      isTouTiao: '0',
-      noComment: '0',
-      firstEcForm: 'false',
-      isToutiaoForm: 'false',
-      noCommentForm: 'false',
-      geoList: '',
-      eosSyXuanti: '0',
-      eosGEO: '0',
-      eosZiZhu: '0',
-      saveType: '2',
-    }
+    const fields = buildZolDraftFields(payload)
     for (const [key, value] of Object.entries(fields)) {
       formData.append(key, value)
     }
     return formData
   }
 
-  /** 从正文 HTML 提取图片列表，构造 guideImg JSON 数组（含宽高） */
-  private buildGuideImg(content: string): Array<{ url: string; width: number; height: number }> {
-    const result: Array<{ url: string; width: number; height: number }> = []
-    for (const match of content.matchAll(IMG_TAG_REGEX)) {
-      const tag = match[0]
-      const srcMatch = tag.match(/src=["']([^"']+)["']/)
-      if (!srcMatch) continue
-      const widthMatch = tag.match(/data-width=["']?(\d+)["']?/)
-      const heightMatch = tag.match(/data-height=["']?(\d+)["']?/)
-      result.push({
-        url: srcMatch[1],
-        width: widthMatch ? parseInt(widthMatch[1], 10) : 0,
-        height: heightMatch ? parseInt(heightMatch[1], 10) : 0,
-      })
+  /**
+   * 上传导读图（双封面）。
+   *
+   * ZOL 的 `guideImg` 字段是封面/导读图列表（与正文 <img> 独立）：
+   * - 元素 1：竖版 3:4（coverVertical）
+   * - 元素 2：横版 4:3（coverHorizontal）
+   * 顺序对齐 HAR 抓包样本（draftId=350103 那次操作的 guideImg）。
+   *
+   * 与懂车帝的策略不同：ZOL 不强制双封面，提供几张就传几张，缺失传空数组。
+   * 都未提供时 logger.warn 提示（不报错，草稿可保存）。
+   *
+   * 每张图走通用的 `uploadImageByUrl` 路径：
+   *   - 扩展环境：post.zol.com.cn 页面上下文（Origin 自动正确 + createImageBitmap 读宽高）
+   *   - Node 环境：直接 fetch（createImageBitmap 读宽高）
+   * siteType=0 由 uploadImageByUrl 内部固定附加。
+   */
+  private async uploadGuideImages(article: Article): Promise<string> {
+    const items: Array<{ url: string; width: number; height: number }> = []
+
+    // 顺序：竖版在前，横版在后（对齐 HAR）
+    const verticalSrc = article.coverVertical
+    if (verticalSrc) {
+      const r = await this.uploadImageByUrl(verticalSrc)
+      items.push({ url: r.url, width: Number(r.attrs?.['data-width'] ?? 0), height: Number(r.attrs?.['data-height'] ?? 0) })
     }
-    return result
+
+    const horizontalSrc = article.coverHorizontal
+    if (horizontalSrc) {
+      const r = await this.uploadImageByUrl(horizontalSrc)
+      items.push({ url: r.url, width: Number(r.attrs?.['data-width'] ?? 0), height: Number(r.attrs?.['data-height'] ?? 0) })
+    }
+
+    if (items.length === 0) {
+      logger.warn('[Zol] 未提供导读图（coverVertical / coverHorizontal），guideImg 将为空数组，编辑器可能使用默认占位')
+    } else if (items.length < 2) {
+      logger.info(`[Zol] 仅上传了 ${items.length} 张导读图（ZOL 抓包样本为 2 张：竖版+横版），建议同时提供 coverVertical + coverHorizontal`)
+    } else {
+      logger.info(`[Zol] 导读图上传完成：${items.length} 张`)
+    }
+
+    return JSON.stringify(items)
   }
 
   // ============ Tab 管理 ============
@@ -622,7 +704,10 @@ interface UploadInTabParams {
  * 在 post.zol.com.cn tab 的 MAIN world 里发起 multipart/form-data 图片上传。
  * - fetch 在页面上下文发起，Origin/Referer 自动是 post.zol.com.cn
  * - 用 createImageBitmap 读取图片宽高（guideImg 字段需要）
- * 该函数会被 chrome.scripting.executeScript 序列化/反序列化，必须是纯函数。
+ *
+ * ⚠️ 纯函数约束（MV3 executeScript 闭包序列化陷阱）：本函数会被序列化后在页面
+ * 上下文执行，禁止引用模块级函数/常量（生产构建会被混淆，页面报 "Ft is not
+ * defined" 导致 executeScript 返回 null）。
  */
 async function uploadImageInTabScript(params: UploadInTabParams): Promise<
   { ok: boolean; url?: string; width?: number; height?: number; error?: string }
@@ -638,10 +723,27 @@ async function uploadImageInTabScript(params: UploadInTabParams): Promise<
 
     const formData = new FormData()
     formData.append('file', file)
+    // HAR 抓包样本：image.upload 的 multipart 必含 siteType=0 字段
+    formData.append('siteType', '0')
+
+    // ZOL 后端要求 zol_userid 自定义请求头，从页面 cookie 内联读取
+    // （模块级函数在 executeScript 序列化后不可见，禁止引用）
+    let zolUserid = ''
+    try {
+      const m = document.cookie.match(/(?:^|;\s*)zol_userid=([^;]+)/)
+      if (m && m[1]) {
+        try { zolUserid = decodeURIComponent(m[1]) } catch { zolUserid = m[1] }
+      }
+    } catch {
+      // ignore
+    }
+    const headers: Record<string, string> = {}
+    if (zolUserid) headers['zol_userid'] = zolUserid
 
     const response = await fetch(uploadUrl, {
       method: 'POST',
       credentials: 'include',
+      headers,
       body: formData,
     })
     const text = await response.text()
@@ -680,64 +782,45 @@ async function uploadImageInTabScript(params: UploadInTabParams): Promise<
 /** executeScript 传入参数：保存草稿 */
 interface SaveDraftInTabParams {
   saveUrl: string
-  title: string
-  scontent: string
-  userId: string
-  guideImg: string
+  /** 完整表单字段：扩展上下文用 buildZolDraftFields 生成，经 args 结构化克隆传入（避免脚本引用模块级函数） */
+  fields: Record<string, string>
 }
 
 /**
  * 在 post.zol.com.cn tab 的 MAIN world 里保存草稿。
  * 表单字段对齐 HAR 抓包样本（businessType=1 / saveType=2 / 全量字段）。
- * 该函数会被 chrome.scripting.executeScript 序列化/反序列化，必须是纯函数。
+ *
+ * ⚠️ 纯函数约束（MV3 executeScript 闭包序列化陷阱）：本函数会被序列化后在页面
+ * 上下文执行，禁止引用模块级函数/常量（生产构建会被混淆，页面报 "Ft is not
+ * defined" 导致 executeScript 返回 null）。表单字段由扩展上下文生成后经 args
+ * 结构化克隆传入；zol_userid 从页面 cookie 内联读取。
  */
 async function saveDraftInTabScript(params: SaveDraftInTabParams): Promise<SaveDraftInTabResult> {
-  const { saveUrl, title, scontent, userId, guideImg } = params
+  const { saveUrl, fields } = params
 
   try {
     const formData = new FormData()
-    const fields: Record<string, string> = {
-      businessType: '1',
-      scontent,
-      title,
-      stitle: '',
-      userId,
-      docType: '',
-      isOriginal: '',
-      isContribution: '0',
-      dutyEditor: '',
-      publishDate: '',
-      subjectList: '',
-      subjectIdStr: '',
-      guideImg,
-      draftId: '',
-      contentId: '',
-      tryId: '',
-      goodsList: '',
-      subjectNameStr: '',
-      eosXuanti: '0',
-      eosDawen: '0',
-      eosUser: '0',
-      eosTeyue: '0',
-      firstEc: '0',
-      isTouTiao: '0',
-      noComment: '0',
-      firstEcForm: 'false',
-      isToutiaoForm: 'false',
-      noCommentForm: 'false',
-      geoList: '',
-      eosSyXuanti: '0',
-      eosGEO: '0',
-      eosZiZhu: '0',
-      saveType: '2',
-    }
     for (const [key, value] of Object.entries(fields)) {
       formData.append(key, value)
     }
 
+    // ZOL 后端要求自定义请求头 `zol_userid`（HAR OPTIONS 验证），从页面 cookie 内联读取
+    let zolUserid = ''
+    try {
+      const m = document.cookie.match(/(?:^|;\s*)zol_userid=([^;]+)/)
+      if (m && m[1]) {
+        try { zolUserid = decodeURIComponent(m[1]) } catch { zolUserid = m[1] }
+      }
+    } catch {
+      // ignore
+    }
+    const headers: Record<string, string> = {}
+    if (zolUserid) headers['zol_userid'] = zolUserid
+
     const response = await fetch(saveUrl, {
       method: 'POST',
       credentials: 'include',
+      headers,
       body: formData,
     })
     const text = await response.text()
@@ -767,15 +850,62 @@ async function saveDraftInTabScript(params: SaveDraftInTabParams): Promise<SaveD
 /**
  * 在 post.zol.com.cn tab 的 MAIN world 里获取用户信息。
  * 优先级：接口响应 → cookie zol_userid → localStorage zol_userInfo（JSON.userId）。
- * 该函数会被 chrome.scripting.executeScript 序列化/反序列化，必须是纯函数。
+ *
+ * ⚠️ 纯函数约束（MV3 executeScript 闭包序列化陷阱）：本函数会被序列化后在页面
+ * 上下文执行，所有辅助逻辑必须内联在函数内部。模块级函数在生产构建时会被
+ * 打包器混淆（如 Ft），序列化后的脚本找不到混淆名，抛 "Ft is not defined"
+ * 导致 executeScript 返回 null。
  */
 async function fetchUserInfoInTabScript(userInfoUrl: string): Promise<
   { ok: boolean; notLoggedIn?: boolean; userId?: string; username?: string; error?: string }
 > {
+  // 内联辅助：读 cookie zol_userid（作为自定义请求头，HAR OPTIONS 验证后端要求）
+  function readZolUseridLocal(): string {
+    try {
+      if (typeof document !== 'undefined') {
+        const m = document.cookie.match(/(?:^|;\s*)zol_userid=([^;]+)/)
+        if (m && m[1]) {
+          try { return decodeURIComponent(m[1]) } catch { return m[1] }
+        }
+      }
+      return ''
+    } catch {
+      return ''
+    }
+  }
+
+  // 内联辅助：读 cookie zol_userid / localStorage zol_userInfo（userId 兜底）
+  function readUserIdLocal(): string {
+    try {
+      if (typeof document !== 'undefined') {
+        const m = document.cookie.match(/(?:^|;\s*)zol_userid=([^;]+)/)
+        if (m && m[1]) {
+          try { return decodeURIComponent(m[1]) } catch { return m[1] }
+        }
+      }
+      if (typeof localStorage !== 'undefined') {
+        const raw = localStorage.getItem('zol_userInfo')
+        if (raw) {
+          const info = JSON.parse(raw) as { userId?: string }
+          if (info.userId) return info.userId
+        }
+      }
+      return ''
+    } catch {
+      return ''
+    }
+  }
+
   try {
+    // 防御性补 zol_userid 自定义请求头
+    const zolUserid = readZolUseridLocal()
+    const headers: Record<string, string> = {}
+    if (zolUserid) headers['zol_userid'] = zolUserid
+
     const response = await fetch(userInfoUrl, {
       method: 'GET',
       credentials: 'include',
+      headers,
     })
     if (!response.ok) {
       return { ok: false, error: `HTTP ${response.status}` }
@@ -794,7 +924,7 @@ async function fetchUserInfoInTabScript(userInfoUrl: string): Promise<
         return { ok: false, notLoggedIn: true }
       }
       // 接口异常（如维护中）：尝试从 cookie / localStorage 兜底
-      const cookieUserId = readUserIdFromCookie()
+      const cookieUserId = readUserIdLocal()
       if (cookieUserId) {
         return { ok: true, userId: cookieUserId }
       }
@@ -808,34 +938,10 @@ async function fetchUserInfoInTabScript(userInfoUrl: string): Promise<
     }
   } catch (e) {
     // 网络异常时兜底读 cookie / localStorage
-    const cookieUserId = readUserIdFromCookie()
+    const cookieUserId = readUserIdLocal()
     if (cookieUserId) {
       return { ok: true, userId: cookieUserId }
     }
     return { ok: false, error: (e as Error).message || '未知错误' }
-  }
-}
-
-/** 从 cookie zol_userid / localStorage zol_userInfo 读取 userId（前端代码验证的存储位置） */
-function readUserIdFromCookie(): string {
-  try {
-    // 1. cookie zol_userid（前端 CreatorAgreement 用 js-cookie 读此值）
-    if (typeof document !== 'undefined') {
-      const m = document.cookie.match(/(?:^|;\s*)zol_userid=([^;]+)/)
-      if (m && m[1]) {
-        try { return decodeURIComponent(m[1]) } catch { return m[1] }
-      }
-    }
-    // 2. localStorage zol_userInfo（Vuex 持久化的用户对象 JSON）
-    if (typeof localStorage !== 'undefined') {
-      const raw = localStorage.getItem('zol_userInfo')
-      if (raw) {
-        const info = JSON.parse(raw) as { userId?: string }
-        if (info.userId) return info.userId
-      }
-    }
-    return ''
-  } catch {
-    return ''
   }
 }
