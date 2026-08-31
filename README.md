@@ -91,7 +91,7 @@
 | Hugo | zip-download | 建站/CMS | ✅ 通过 Markdown 下载 |
 
 - [提交新平台请求](https://airtable.com/shrLSJMnTC2BlmP29)
-
+## weixin,zhihu,weibo,xiaohongshu,juejin,csdn,jianshu,toutiao,douyin,qq-content,bilibili,baijiahao,yuque,douban,sohu,xueqiu,woshipm,dayu,yidian,51cto,imooc,oschina,segmentfault,cnblogs,sohufocus,autohome,dongchedi,zol,x,eastmoney,smzdm,netease,wordpress,typecho,zip-download,zip-download
 ### 双封面平台（懂车帝）
 
 懂车帝是典型的双封面平台：信息流推荐位用 **横版**（4:3），图文详情页用 **竖版**（3:4），两者必须分别上传，不能复用同一张图。**懂车帝会忽略通用的 `cover` 字段**，必须用专门的 `cover-horizontal` + `cover-vertical`。
