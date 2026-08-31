@@ -24,6 +24,16 @@ export class CnblogsAdapter extends CodeAdapter {
 
   private xsrfToken: string | null = null
 
+  /**
+   * 本次发布过程中上传失败的图片 src 列表。
+   *
+   * 背景：base class `processImages` 会对每张图片 `try/catch` 调用 `uploadFn`，
+   * 单张失败会被静默吞掉（保留原 markdown src），但 publish() 调用方拿不到失败原因。
+   * 这里在 uploadImageByUrl 抛错前记录失败的 src，publish 末尾汇总到 SyncResult.message，
+   * 让 MCP/CLI 上层能感知“草稿虽然创建成功，但有图片未上传”。
+   */
+  private failedImages: Array<{ src: string; error: string }> = []
+
   /** 博客园 API 需要的 Header 规则 */
   private readonly HEADER_RULES = [
     {
@@ -236,10 +246,24 @@ export class CnblogsAdapter extends CodeAdapter {
 
       logger.debug('Draft created:', postId)
 
+      // 汇总上传失败的图片给上层（MCP/CLI 透传到 UI）
+      let extraMessage = ''
+      if (this.failedImages.length > 0) {
+        const lines = this.failedImages
+          .map(f => `  - ${f.src.slice(0, 80)}: ${f.error}`)
+          .join('\n')
+        extraMessage =
+          `草稿已保存，但有 ${this.failedImages.length} 张图片未上传到博客园图床：\n${lines}\n` +
+          '提示：本地相对路径（如 ./cover.jpg）在 MV3 Service Worker 中 fetch 会失败，' +
+          '请用 read_file 读取后转为 base64 data URI 再传 markdown。'
+        logger.warn('[Cnblogs] 图片上传失败汇总：\n' + lines)
+      }
+
       return this.createResult(true, {
         postId,
         postUrl: draftUrl,
         draftOnly: options?.draftOnly ?? true,
+        ...(extraMessage ? { message: extraMessage } : {}),
       })
     }).catch((error) => this.createResult(false, {
       error: (error as Error).message,
@@ -249,26 +273,35 @@ export class CnblogsAdapter extends CodeAdapter {
   /**
    * 上传图片到博客园
    * 使用新版 CORS 上传接口
+   *
+   * src 支持的形式：
+   *   1. data URI（CLI/MCP 模式，由上游 convertImagesToDataUri / resolveLocalImages 转好）
+   *   2. http(s):// 远程 URL（base class processImages 上游提取的图）
+   *   3. blob: URL（页面 createObjectURL，极少见）
+   *
+   * 不支持的：
+   *   - 相对路径 `./xxx`、`../xxx`（MV3 Service Worker 里 fetch 相对路径会
+   *     "TypeError: Failed to fetch"，因为没有 base URL）。这种情况抛错并
+   *     push 到 failedImages，让 publish 末尾汇总到 SyncResult.message 提示用户。
+   *
+   * 上传接口：POST https://upload.cnblogs.com/v2/images/cors-upload
+   * multipart 字段：image(blob)、app=blog、uploadType=Select（HAR 验证）
+   * 响应取 imageUrl（HAR 验证）
    */
   protected async uploadImageByUrl(src: string): Promise<ImageUploadResult> {
     if (!this.xsrfToken) {
       throw new Error('XSRF-TOKEN 未获取')
     }
 
-    // 下载图片
-    const imageResponse = await fetch(src)
-    if (!imageResponse.ok) {
-      throw new Error('图片下载失败: ' + src)
-    }
-    const imageBlob = await imageResponse.blob()
+    // 1) 把 src 转成 Blob + 推断文件名
+    const { blob: imageBlob, filename } = await this.srcToImageBlob(src)
 
-    // 构建 FormData
+    // 2) 构建 FormData 上传到博客园图床
     const formData = new FormData()
-    formData.append('image', imageBlob, 'image.png')
+    formData.append('image', imageBlob, filename)
     formData.append('app', 'blog')
     formData.append('uploadType', 'Select')
 
-    // 上传图片
     const uploadResponse = await this.runtime.fetch(
       'https://upload.cnblogs.com/v2/images/cors-upload',
       {
@@ -297,8 +330,8 @@ export class CnblogsAdapter extends CodeAdapter {
 
     logger.debug('Image upload parsed response:', JSON.stringify(res))
 
-    // 尝试不同的响应格式
-    const imageUrl = res.data || res.url || res.imageUrl || res.src
+    // 尝试不同的响应字段名（HAR 验证用 imageUrl，少数场景可能换字段）
+    const imageUrl = res.imageUrl || res.data || res.url || res.src
     if (!imageUrl || typeof imageUrl !== 'string') {
       throw new Error(`图片上传失败: 无法获取图片 URL - ${JSON.stringify(res)}`)
     }
@@ -306,6 +339,88 @@ export class CnblogsAdapter extends CodeAdapter {
     logger.info('Image uploaded:', imageUrl)
     return {
       url: imageUrl,
+    }
+  }
+
+  /**
+   * 把 src 转成 Blob + 推断文件名
+   *
+   * 单独拆出来便于：
+   *   1. 集中处理 data URI / http(s) / blob: / 相对路径四种 src 形式
+   *   2. 失败时统一 push 到 failedImages 供 publish 末尾汇总
+   *   3. 文件名推断（博客园图床靠 filename 后缀识别图片类型，参考 HAR：
+   *      filename="3be807ff220e01f4d8c9c9c43e33c05c.jpg" → image/jpeg）
+   */
+  private async srcToImageBlob(src: string): Promise<{ blob: Blob; filename: string }> {
+    const mimeToExt = (m: string): string => {
+      const x = m.toLowerCase().split(';')[0]
+      if (x.includes('jpeg') || x.includes('jpg')) return 'jpg'
+      if (x.includes('png')) return 'png'
+      if (x.includes('gif')) return 'gif'
+      if (x.includes('webp')) return 'webp'
+      if (x.includes('bmp')) return 'bmp'
+      return 'jpg'
+    }
+    const extFromUrl = (u: string): string => {
+      try {
+        const last = new URL(u).pathname.split('.').pop()?.toLowerCase().split('?')[0] || ''
+        return /^(jpe?g|png|gif|webp|bmp)$/.test(last) ? last : ''
+      } catch {
+        return ''
+      }
+    }
+
+    try {
+      if (src.startsWith('data:')) {
+        // data URI: data:image/jpeg;base64,...
+        const match = src.match(/^data:([^;]+);base64,(.+)$/)
+        if (!match) {
+          throw new Error('非法的 data URI: ' + src.slice(0, 60))
+        }
+        const mimeType = match[1]
+        const binary = atob(match[2])
+        const bytes = new Uint8Array(binary.length)
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+        return {
+          blob: new Blob([bytes], { type: mimeType }),
+          filename: `image.${mimeToExt(mimeType)}`,
+        }
+      }
+
+      if (src.startsWith('http://') || src.startsWith('https://')) {
+        // 远程 URL：encodeUrlPath 处理中文路径段，避免服务端下载失败
+        const encoded = this.encodeUrlPath(src)
+        const resp = await fetch(encoded)
+        if (!resp.ok) {
+          throw new Error(`远程图片下载失败 (${resp.status}): ${src}`)
+        }
+        const blob = await resp.blob()
+        const mimeType = blob.type || 'image/jpeg'
+        const ext = extFromUrl(src) || mimeToExt(mimeType)
+        return { blob, filename: `image.${ext}` }
+      }
+
+      if (src.startsWith('blob:')) {
+        // blob URL（页面 createObjectURL）
+        const resp = await fetch(src)
+        if (!resp.ok) {
+          throw new Error(`blob 图片读取失败 (${resp.status}): ${src}`)
+        }
+        const blob = await resp.blob()
+        const mimeType = blob.type || 'image/jpeg'
+        return { blob, filename: `image.${mimeToExt(mimeType)}` }
+      }
+
+      // 相对路径 / 其他不支持的形式
+      // MV3 Service Worker 里 fetch('./xxx') 会直接 Failed to fetch（无 base URL），
+      // 显式抛错让上层感知，并在 failedImages 记录，方便 publish 末尾汇总提示。
+      throw new Error(
+        `博客园适配器不支持的图片来源（MV3 Service Worker 无法 fetch 相对路径）：${src.slice(0, 80)}`,
+      )
+    } catch (error) {
+      const message = (error as Error).message || String(error)
+      this.failedImages.push({ src, error: message })
+      throw error
     }
   }
 }

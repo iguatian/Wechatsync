@@ -123,20 +123,44 @@ const MIME_TYPES: Record<string, string> = {
 const ARTICLE_SCOPED_HOSTS = new Set(['smzdm', 'yuque'])
 
 /**
+ * Publish-context-required 平台：图片上传必须在 publish 上下文才能成功
+ * （如 cnblogs 的 uploadImageByUrl 依赖 publish 中获取的 XSRF-TOKEN，
+ *  publish 之前调用 uploadImage 会拖到默认实现里检查 xsrfToken 而失败）。
+ * CLI 在 publish 之前单独上传本地图片时这些平台同样会失败，归入同一类处理：
+ * 自动降级到默认图床（weibo），让 cnblogs publish 时再从 weibo URL 转存。
+ *
+ * 与 ARTICLE_SCOPED_HOSTS 的区别：
+ *   - smzdm / yuque 是架构限制（必须 article_id）
+ *   - cnblogs 是时序限制（publish 才能拿 XSRF；其它平台如 juejin/csdn/zhi hu
+ *     都重写了 uploadImage 独立获取 token，不受此约束）
+ */
+const PUBLISH_CONTEXT_REQUIRED_HOSTS = new Set(['cnblogs'])
+
+/**
+ * 合并判断：是否属于“不能在 publish 之前独立上传图片”的平台
+ */
+function requiresPublishContext(platform: string): boolean {
+  return ARTICLE_SCOPED_HOSTS.has(platform) || PUBLISH_CONTEXT_REQUIRED_HOSTS.has(platform)
+}
+
+/**
  * 默认图床：通用图床，图片上传接口不依赖具体文章上下文
  */
 const DEFAULT_IMAGE_HOST = 'weibo'
 
 /**
  * 智能选择图片图床
- * 当首选平台是 article-scoped 时，自动降级到默认图床，避免在
- * publish 之前上传图片失败导致最终草稿里图片引用仍是本地路径。
+ * 当首选平台是 article-scoped 或 publish-context-required 时，自动降级
+ * 到默认图床，避免在 publish 之前上传图片失败导致最终草稿里图片引用仍是本地路径。
  */
-function resolveImageHost(preferred: string): { host: string; downgraded: boolean } {
-  if (!ARTICLE_SCOPED_HOSTS.has(preferred)) {
+function resolveImageHost(preferred: string): { host: string; downgraded: boolean; reason?: string } {
+  if (!requiresPublishContext(preferred)) {
     return { host: preferred, downgraded: false }
   }
-  return { host: DEFAULT_IMAGE_HOST, downgraded: true }
+  const reason = ARTICLE_SCOPED_HOSTS.has(preferred)
+    ? '需先创建文章'
+    : '需先在 publish 中获取 XSRF/Token'
+  return { host: DEFAULT_IMAGE_HOST, downgraded: true, reason }
 }
 
 /**
@@ -827,11 +851,11 @@ program
 
       // dry-run 也提示图床选择（特别是 article-scoped 平台会降级），让用户预知行为
       if (localImages.length > 0) {
-        const { host: imageHostDry, downgraded: downgradedDry } = resolveImageHost(platforms[0])
+        const { host: imageHostDry, downgraded: downgradedDry, reason: reasonDry } = resolveImageHost(platforms[0])
         console.log()
         console.log(
           chalk.bold(`计划上传 ${localImages.length} 张本地图片到 ${imageHostDry}`) +
-          (downgradedDry ? chalk.gray(` (${platforms[0]} 需先创建文章，自动降级)`) : '')
+            (downgradedDry ? chalk.gray(` (${platforms[0]} ${reasonDry}，自动降级)`) : '')
         )
       }
 
@@ -858,7 +882,7 @@ program
       //   此时直接把图片转 data URI 嵌入内容，让各平台适配器用各自的上传接口
       //   把图片存到目标平台图床，从根本上避免跨图床下载。
       // - 否则维持原有行为：上传到默认图床（通常是 weibo），其他平台从该图床转存。
-      const hasArticleScopedTarget = platforms.some((p: string) => ARTICLE_SCOPED_HOSTS.has(p))
+      const hasArticleScopedTarget = platforms.some(requiresPublishContext)
 
       if (hasArticleScopedTarget) {
         console.log(
@@ -888,11 +912,11 @@ program
         // 智能选择图床：当目标是 article-scoped 平台（必须 article_id 才能上传）
         // 时，自动降级到默认图床（weibo），避免 publish 之前上传失败导致最终
         // 草稿里图片引用仍是本地路径。
-        const { host: imageHost, downgraded } = resolveImageHost(platforms[0])
+        const { host: imageHost, downgraded, reason } = resolveImageHost(platforms[0])
         console.log(chalk.bold(`发现 ${localImages.length} 张本地图片，上传到 ${imageHost}...`))
         if (downgraded) {
           console.log(
-            chalk.gray(`  (${platforms[0]} 图片上传必须先创建文章，已自动改用 ${imageHost} 作为图床)`)
+            chalk.gray(`  (${platforms[0]} ${reason}，自动改用 ${imageHost} 作为图床)`)
           )
         }
         console.log()

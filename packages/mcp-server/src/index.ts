@@ -17,6 +17,7 @@ import express, { type Request, type Response } from 'express'
 import fs from 'fs'
 import path from 'path'
 import { ExtensionBridge } from './ws-bridge.js'
+import { resolveLocalImages } from './local-images.js'
 import type { PlatformInfo, SyncResult } from './types.js'
 
 // 端口配置：
@@ -120,6 +121,10 @@ function createServer(): Server {
                 type: 'string',
                 description: '封面图 URL 或 base64 data URI（可选）',
               },
+              basePath: {
+                type: 'string',
+                description: '文章所在目录的绝对路径（可选，强烈建议传入）。传入后，content/markdown 里的本地相对路径图片（如 ./cover-long.jpg）会被读取并转为 data URI 内嵌。不传则本地路径图片无法被扩展上传（Service Worker 无法 fetch 相对路径），会导致正文图片丢失。',
+              },
             },
             required: ['platforms', 'title', 'markdown'],
           },
@@ -189,17 +194,77 @@ function createServer(): Server {
           })
           break
 
-        case 'sync_article':
+        case 'sync_article': {
+          const syncArgs = args as {
+            platforms: string[]
+            title: string
+            markdown: string
+            content?: string
+            cover?: string
+            basePath?: string
+          }
+
+          let content = syncArgs.content
+          let markdown = syncArgs.markdown
+
+          // 本地相对路径图片必须在这里读取转 data URI：
+          // 扩展端 Service Worker fetch('./cover-long.jpg') 会 TypeError: Failed to fetch，
+          // 导致正文图片丢失 + 上传失败。和 SSE 入口 `server.ts` 走同一份共享实现
+          // （见 ./local-images.ts），避免两处逻辑发散。
+          if (syncArgs.basePath) {
+            if (content) {
+              const htmlResult = await resolveLocalImages(content, syncArgs.basePath)
+              content = htmlResult.content
+              if (htmlResult.converted > 0) {
+                console.error(
+                  `[MCP] 已将 ${htmlResult.converted} 张本地相对路径图片转为 data URI（content, basePath=${syncArgs.basePath}）`,
+                )
+              }
+              if (htmlResult.failed.length > 0) {
+                console.error(
+                  `[MCP] 警告：以下本地图片读取失败（保持原路径，扩展端将无法上传）：${htmlResult.failed.join(', ')}`,
+                )
+              }
+            }
+            if (markdown) {
+              const mdResult = await resolveLocalImages(markdown, syncArgs.basePath)
+              markdown = mdResult.content
+              if (mdResult.converted > 0) {
+                console.error(
+                  `[MCP] 已将 ${mdResult.converted} 张本地相对路径图片转为 data URI（markdown, basePath=${syncArgs.basePath}）`,
+                )
+              }
+              if (mdResult.failed.length > 0) {
+                console.error(
+                  `[MCP] 警告：以下本地图片读取失败（保持原路径，扩展端将无法上传）：${mdResult.failed.join(', ')}`,
+                )
+              }
+            }
+          } else {
+            // 没传 basePath 时检查一下本地相对路径，给出明确告警，
+            // 避免用户默默地看到 “草稿创建成功但图片没传”
+            const localImgHits = (markdown || '').match(/!\[([^\]]*)\]\(([^)]+\.(?:jpe?g|png|gif|webp|svg|bmp))/i)
+            const localHtmlHits = (content || '').match(/<img\b[^>]*?\bsrc=["']\.{0,2}\/[^"']+["']/i)
+            if (localImgHits || localHtmlHits) {
+              console.error(
+                '[MCP] 警告：sync_article 未传 basePath，但 content/markdown 含本地相对路径图片。' +
+                '扩展端 Service Worker 无法 fetch 本地路径，图片将不会上传到平台图床。' +
+                '请在调用时传入 basePath（文章所在目录的绝对路径）。',
+              )
+            }
+          }
+
           result = await bridge.request<SyncResult[]>('syncArticle', {
-            platforms: (args as { platforms: string[] }).platforms,
+            platforms: syncArgs.platforms,
             article: {
-              title: (args as { title: string }).title,
-              content: (args as { content: string }).content,
-              markdown: (args as { markdown?: string }).markdown,
-              cover: (args as { cover?: string }).cover,
+              title: syncArgs.title,
+              content,
+              markdown,
+              cover: syncArgs.cover,
             },
           })
           break
+        }
 
         case 'extract_article':
           result = await bridge.request('extractArticle')
