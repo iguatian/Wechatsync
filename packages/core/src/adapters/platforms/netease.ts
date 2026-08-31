@@ -140,23 +140,12 @@ export class NeteaseAdapter extends CodeAdapter {
         logger.warn('[Netease] fetchUrsToken 失败，使用空 token：', (e as Error).message)
       }
 
-      // 3. 上传封面图（article.cover）。
-      //    网易号封面是 content 第一段的 <img>，所以传 picupload 拿到 URL 后
-      //    还得在第四步插到正文最前面。这里先存到 coverUrl 备用。
-      let coverUrl = ''
-      let coverError = ''
-      if (article.cover) {
-        try {
-          const coverResult = await this.uploadImageByUrl(article.cover)
-          coverUrl = coverResult.url
-          logger.info(`[Netease] 封面上传成功：${coverUrl}`)
-        } catch (e) {
-          coverError = (e as Error).message
-          logger.warn('[Netease] 封面上传失败，正文继续保存：', coverError)
-        }
-      }
-
-      // 4. 处理正文图片（替换为网易号图床 URL）
+      // 3. 处理正文图片（替换为网易号图床 URL）。
+      //    关键设计：网易号的「封面」不是 publishV2 的独立传图，而是从正文里取一张图
+      //    —— HAR mp.163-select-img.com.har（用户在编辑器手动设封面）走的是
+      //    “从正文选图”路径，publish 链路中没有独立 picupload 调用。
+      //    所以我们这里是：先 processImages 把正文图片都上传到 dingyue.ws.126.net，
+      //    然后从处理后的 content 里提取第一张 <img> 作为封面。
       let content = article.html || ''
       try {
         content = await this.processImages(
@@ -171,16 +160,27 @@ export class NeteaseAdapter extends CodeAdapter {
         logger.warn('[Netease] processImages 中途失败，继续发布：', (e as Error).message)
       }
 
-      // 5. 把封面作为 content 第一段插入
-      //    网易号编辑器的真实结构（HAR mp.163.com.har / mp.163-select-img.com.har 验证）：
-      //      <p style="text-align:center; font-size:16px; color:#666;">
-      //        <img src="<coverUrl>" alt _src="<coverUrl>" contenteditable="false" />
-      //        <br />
-      //      </p>
-      //    （部分早期抓包还会带 id="dingyue_<timestamp>"，但 mp.163-select-img.com.har 只有 _src）
-      if (coverUrl) {
-        const coverImg = `<p style="text-align:center; font-size:16px; color:#666;"><img src="${coverUrl}" alt _src="${coverUrl}" contenteditable="false" /><br /></p>`
-        content = coverImg + content
+      // 4. 从处理后的 content 里提取首图 URL（= 封面）。
+      //    <img 标签现在由 processImages 产出为
+      //    <img src="<url>" alt="" _src="<url>" contenteditable="false" />
+      //    （与 HAR mp.163-select-img.com.har 中的结构一致）
+      let coverUrl = this.extractFirstImageUrl(content)
+      let coverError = ''
+
+      // 5. 兑底：如果正文里没有图，且 article.cover 有值，则把 article.cover 上传
+      //    并在 content 前面插入一个网易号风格的封面段。
+      //    （仅在用户额外传了 article.cover 但正文未含图时才走，主流路径中
+      //    article.cover 是空，正文含图，走上面的“首图 = 封面”路径。）
+      if (!coverUrl && article.cover) {
+        try {
+          const r = await this.uploadImageByUrl(article.cover)
+          coverUrl = r.url
+          content = this.buildCoverParagraph(coverUrl) + content
+          logger.info(`[Netease] 正文无图，兑底从 article.cover 上传：${coverUrl}`)
+        } catch (e) {
+          coverError = (e as Error).message
+          logger.warn('[Netease] article.cover 兑底上传失败，封面留空：', coverError)
+        }
       }
 
       // 6. 第一次 publishV2（articleId=-1）建立空草稿拿到 docId
@@ -195,7 +195,7 @@ export class NeteaseAdapter extends CodeAdapter {
         article.title,
         content,
         ursToken,
-        coverUrl, // ★ 封面 URL 用于填 picUrl 字段（不传则服务端不识别封面）
+        coverUrl, // ★ 封面 URL = content 首图 URL（HAR 验证）
       )
 
       // 8. 构造结果（封面诊断字段同 csdn 适配器约定）
@@ -204,14 +204,12 @@ export class NeteaseAdapter extends CodeAdapter {
         coverUrl?: string
         coverError?: string
       } = {}
-      if (article.cover) {
-        if (coverUrl) {
-          coverDiagnostics.coverUploaded = true
-          coverDiagnostics.coverUrl = coverUrl
-        }
-        if (coverError) {
-          coverDiagnostics.coverError = coverError
-        }
+      if (coverUrl) {
+        coverDiagnostics.coverUploaded = true
+        coverDiagnostics.coverUrl = coverUrl
+      } else if (article.cover) {
+        // article.cover 有但上传失败：诊断给上层
+        coverDiagnostics.coverError = coverError || '正文无图且 article.cover 上传失败'
       }
       const baseResult: Partial<SyncResult> = {
         postId: docId,
@@ -221,7 +219,7 @@ export class NeteaseAdapter extends CodeAdapter {
       }
       if (article.cover && coverError && !coverUrl) {
         baseResult.error = `封面图上传失败: ${coverError}`
-        baseResult.message = '草稿已保存，但网易号封面未生效，请手动到编辑器补传封面'
+        baseResult.message = '草稿已保存，但网易号封面未生效（正文也无图可当封面）'
       }
       return this.createResult(true, baseResult)
     }).catch((error) => this.createResult(false, {
@@ -514,7 +512,20 @@ export class NeteaseAdapter extends CodeAdapter {
       throw new Error('picupload 响应未含 url 字段')
     }
     logger.debug('[Netease] picupload response:', parsed)
-    return { url: result.url }
+    // ★ 关键：返回 attrs 让 processImages 替换出的 <img> 带上网易号编辑器需要的属性。
+    //   HAR mp.163.com.har / mp.163-select-img.com.har 中正文里的 <img> 都被编辑器
+    //   打包成 <img src="<url>" alt _src="<url>" contenteditable="false" /> 的结构。
+    //   _src 是网易号编辑器用来保存「源 URL」、供“设置封面”从正文选图时反查的引用。
+    //   contenteditable="false" 锁住这块不可编辑，是网易号为“封面 / 内部资源”插图做的防误改标记。
+    //   alt 加空值是为了与编辑器生成的 HTML 结构对齐。
+    return {
+      url: result.url,
+      attrs: {
+        alt: '',
+        _src: result.url,
+        contenteditable: 'false',
+      },
+    }
   }
 
   /** MIME → 扩展名映射（兜底用） */
@@ -527,5 +538,34 @@ export class NeteaseAdapter extends CodeAdapter {
       'image/webp': 'webp',
     }
     return map[mime.toLowerCase()] || 'jpg'
+  }
+
+  /**
+   * 从 content 中提取第一张 <img> 的 src。
+   * 这里只关心正文里第一张作为封面的图：严格取 <img src="..."> 的属性（其他属性如 alt / data-* 不需提取）。
+   * 返回空字符串表示 content 里没有图。
+   */
+  private extractFirstImageUrl(content: string): string {
+    const m = content.match(/<img[^>]+src="([^"]+)"/i)
+    if (!m) return ''
+    // HTML 属性里的 &amp; / &lt; / &gt; / &quot; / &#39; 需解码（与 dayu 适配器一致的兜底）
+    return m[1]
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+  }
+
+  /**
+   * 构造一个网易号编辑器风格的封面 <p> 段。
+   * 用于"正文无图 + article.cover 兜底上传"路径。
+   * HAR mp.163-select-img.com.har 参考：
+   *   <p style="text-align:center; font-size:16px; color:#666;">
+   *     <img src="<url>" alt _src="<url>" contenteditable="false" /><br />
+   *   </p>
+   */
+  private buildCoverParagraph(coverUrl: string): string {
+    return `<p style="text-align:center; font-size:16px; color:#666;"><img src="${coverUrl}" alt _src="${coverUrl}" contenteditable="false" /><br /></p>`
   }
 }
