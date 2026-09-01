@@ -305,7 +305,10 @@ export abstract class CodeAdapter implements PlatformAdapter {
 
         logger.debug(`Image uploaded: ${uploadResult.url}`)
       } catch (error) {
-        logger.error(`Failed to upload image: ${src}`, error)
+        // 部分失败不中断后续图片处理。日志降为 warn —— 这不是程序错误，
+        // 而是某张图上传失败、原文保留原 src 不变继续走（头条适配器会在 publish
+        // 末尾再走一道 strip / failedImages 汇总，不会让服务端 7115）。
+        logger.warn(`Failed to upload image: ${src}`, error)
         // 继续处理其他图片
       }
 

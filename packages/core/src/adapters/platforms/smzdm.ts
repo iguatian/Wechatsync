@@ -498,7 +498,7 @@ export class SmzdmAdapter extends CodeAdapter {
       [string, Array<[string, string]>, boolean, string]
     >(
       tabId,
-      async (requestUrl: string, entries: Array<[string, string]>, diag: boolean, uploadIdStr: string) => {
+      async (requestUrl: string, entries: Array<[string, string]>, diag: boolean, _uploadIdStr: string) => {
         // 注意：MAIN world 中 chrome.runtime 不可用（sendMessage 实际无效），
         // 诊断日志同时收集到 logs 数组，随 executeScript 返回值回传给扩展侧打印。
         const logs: Array<{ event: string; payload: Record<string, unknown> }> = []

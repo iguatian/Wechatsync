@@ -179,12 +179,7 @@ interface OmEditorCacheResp {
   }
 }
 
-interface OmSaveData {
-  articleId?: string
-  article_id?: string
-  url?: string
-  id?: string
-}
+
 
 /**
  * 把任意 editorCache/update 响应规整成统一形态
@@ -875,20 +870,7 @@ export class QQContentAdapter extends CodeAdapter {
     }
   }
 
-  /**
-   * 从 HTML 中抽取已上传的图片 attr，提取企鹅号多尺寸映射。
-   * （用于封面之外的正文图片——但正文图不需要填 imgurl_ext，只留接口以便将来扩展）
-   */
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  private extractOmSizes(html: string): Record<string, string> | null {
-    const m = html.match(/data-om-sizes="([^"]+)"/)
-    if (!m) return null
-    try {
-      return JSON.parse(decodeURIComponent(m[1]))
-    } catch {
-      return null
-    }
-  }
+
 
   /**
    * 上传图片（公开入口，供 extension bridge 与 CLI 统一调用）
