@@ -30,7 +30,7 @@
 
 ## 功能特性
 
-- **一键批量发布**: 微信公众号文章同步到知乎、掘金、头条、CSDN、简书、微博、小红书、抖音、汽车之家、懂车帝、中关村在线等 32+ 自媒体平台
+- **一键批量发布**: 微信公众号文章同步到知乎、掘金、头条、CSDN、简书、微博、小红书、抖音、汽车之家、懂车帝、中关村在线等 27+ 自媒体平台
 - **网页转 Markdown**: 任意网页智能提取正文，自动过滤广告噪音，图片本地化，打包为 Markdown + 图片 ZIP 压缩包
 - **自建站支持**: WordPress、Typecho、博客园 (MetaWeblog API)
 - **智能提取**: 自动从网页提取文章标题、内容、封面图（基于 Safari 阅读模式）
@@ -44,12 +44,12 @@
 
 **推荐**: [Chrome 网上应用店](https://chrome.google.com/webstore/detail/%E5%BE%AE%E4%BF%A1%E5%90%8C%E6%AD%A5%E5%8A%A9%E6%89%8B/hchobocdmclopcbnibdnoafilagadion) (自动更新)
 
-**手动安装**: 下载 [最新 Release](https://wpics.oss-cn-shanghai.aliyuncs.com/wechatsync-2.0.9.zip?date=20260324) 解压后加载到 Chrome 扩展
+**手动安装**: 下载 [最新 Release](https://wpics.oss-cn-shanghai.aliyuncs.com/wechatsync-2.0.9.zip?date=20260274) 解压后加载到 Chrome 扩展
 
 支持 Chrome / Edge / 360 / QQ 等 Chromium 内核浏览器
 
 
-## 支持 32+ 主流平台
+## 支持 27+ 主流平台
 
 | 平台 | ID | 类型 | 状态 |
 |-----|-----|-----|-----|
@@ -66,9 +66,6 @@
 | B站专栏 | bilibili | 通用 | ✅ |
 | 百家号 | baijiahao | 通用 | ✅ |
 | 语雀 | yuque | 技术社区 | ✅ |
-| 豆瓣 | douban | 通用 | ✅ |
-| 搜狐号 | sohu | 通用 | ✅ |
-| 雪球 | xueqiu | 财经 | ✅ |
 | 人人都是产品经理 | woshipm | 产品 | ✅ |
 | 大鱼号 | dayu | 通用 | ✅ |
 | 一点号 | yidian | 通用 | ✅ |
@@ -77,18 +74,24 @@
 | 开源中国 | oschina | 技术社区 | ✅ |
 | SegmentFault | segmentfault | 技术社区 | ✅ |
 | 博客园 | cnblogs | 技术社区 | ✅ |
-| 搜狐焦点 | sohufocus | 房产 | ✅ |
 | 汽车之家 | autohome | 汽车 | ✅ 🆕 |
 | 懂车帝 | dongchedi | 汽车 | ✅ 🆕 |
 | 中关村在线 | zol | 数码科技 | ✅ 🆕 |
-| X (Twitter) | x | 海外 | ✅ |
-| 东方财富 | eastmoney | 财经 | ✅ |
 | 什么值得买 | smzdm | 通用 | ✅ |
 | 网易号 | netease | 通用 | ✅ |
+| 搜狐号 | sohu | 通用 | ✅ |
+
+<!-- 暂时不用支持 -->
+| 搜狐焦点 | sohufocus | 房产 | ✅ |
+| 雪球 | xueqiu | 财经 | ✅ |
+| 东方财富 | eastmoney | 财经 | ✅ |
+<!-- 不用支持 -->
+<!-- | 豆瓣 | douban | 通用 | ✅ |
+| X (Twitter) | x | 海外 | ✅ |
 | WordPress | wordpress | 建站/CMS | ✅ |
 | Typecho | typecho | 建站/CMS | ✅ |
 | Hexo | zip-download | 建站/CMS | ✅ 通过 Markdown 下载 |
-| Hugo | zip-download | 建站/CMS | ✅ 通过 Markdown 下载 |
+| Hugo | zip-download | 建站/CMS | ✅ 通过 Markdown 下载 | -->
 
 - [提交新平台请求](https://airtable.com/shrLSJMnTC2BlmP29)
 ## weixin,zhihu,weibo,xiaohongshu,juejin,csdn,jianshu,toutiao,douyin,qq-content,bilibili,baijiahao,yuque,douban,sohu,xueqiu,woshipm,dayu,yidian,51cto,imooc,oschina,segmentfault,cnblogs,sohufocus,autohome,dongchedi,zol,x,eastmoney,smzdm,netease,wordpress,typecho,zip-download,zip-download
