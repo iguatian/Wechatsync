@@ -220,11 +220,9 @@ export class JiemianAdapter extends CodeAdapter {
       let coverResult: CoverUploadResult | null = null
       let coverError: string | undefined
       if (article.cover) {
-        logger.info(`[Jiemian][DIAG] article.cover = ${article.cover}`)
         try {
           coverResult = await this.uploadCoverByUrl(article.cover)
           logger.info(`[Jiemian] 封面上传成功：${coverResult.original}`)
-          logger.info(`[Jiemian][DIAG] coverResult = ${JSON.stringify(coverResult)}`)
         } catch (e) {
           coverError = (e as Error).message
           logger.warn('[Jiemian] 封面上传失败：', coverError)
@@ -241,7 +239,6 @@ export class JiemianAdapter extends CodeAdapter {
       logger.debug('[Jiemian] verify_code:', verifyCode)
 
       // 6. 提交草稿
-      logger.info(`[Jiemian][DIAG] submitDraft params: oImage=${coverResult?.original || ''} zImage=${coverResult?.thumb || ''}`)
       const result = await this.submitDraft({
         title: article.title,
         summary,
@@ -251,7 +248,6 @@ export class JiemianAdapter extends CodeAdapter {
         cid: DEFAULT_CID,
         verifyCode,
       })
-      logger.info(`[Jiemian][DIAG] submitDraft response = ${JSON.stringify(result)}`)
 
       if (result.code !== 1) {
         // 业务错误：透传 message
@@ -317,7 +313,6 @@ export class JiemianAdapter extends CodeAdapter {
       })
 
       const text = await resp.text()
-      logger.info(`[Jiemian][DIAG] uploadImage status=${resp.status} content-type=${resp.headers.get('content-type')} body[0:500]=${text.substring(0, 500)}`)
       let data: JiemianBodyImageUploadResp
       try {
         data = JSON.parse(text) as JiemianBodyImageUploadResp
@@ -379,7 +374,6 @@ export class JiemianAdapter extends CodeAdapter {
     })
 
     const text = await resp.text()
-    logger.info(`[Jiemian][DIAG] uploadCover status=${resp.status} content-type=${resp.headers.get('content-type')} body[0:500]=${text.substring(0, 500)}`)
     let data: JiemianCoverUploadResp
     try {
       data = JSON.parse(text) as JiemianCoverUploadResp
@@ -475,7 +469,6 @@ export class JiemianAdapter extends CodeAdapter {
     })
 
     const text = await resp.text()
-    logger.info(`[Jiemian][DIAG] submitDraft raw status=${resp.status} content-type=${resp.headers.get('content-type')} body[0:500]=${text.substring(0, 500)}`)
     if (!resp.ok) {
       throw new Error(`提交文章失败：HTTP ${resp.status}: ${text.substring(0, 200)}`)
     }
