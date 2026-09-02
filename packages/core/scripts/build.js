@@ -31,4 +31,25 @@ if (result.error) {
   process.exit(1)
 }
 
-process.exit(result.status ?? 1)
+if ((result.status ?? 1) !== 0) {
+  process.exit(result.status ?? 1)
+}
+
+// DTS 后处理：tsup 8.5.1 在 DTS bundling 时会丢掉 jiemian.ts（原因不明，
+// ESM bundle 包含 JiemianAdapter，但 DTS 不包含）。fix-dts.js 通过 TS Compiler API
+// 同步生成 jiemian.d.ts 并合并到 dist/adapters/index.{d.ts,d.mts} 与 dist/index.{d.ts,d.mts}。
+// 直接 require 调用（而非 spawn 子进程）以兼容 PowerShell 沙箱环境。
+let fixPatched = 0
+try {
+  const fixDts = require('./fix-dts')
+  fixPatched = fixDts.main()
+} catch (e) {
+  console.error('[build] fix-dts 失败:', e && e.stack ? e.stack : e)
+  process.exit(1)
+}
+if (fixPatched === 0) {
+  console.error('[build] fix-dts 未修补任何 dts 文件，请检查 dist 是否存在')
+  process.exit(1)
+}
+
+process.exit(0)

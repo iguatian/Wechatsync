@@ -3,12 +3,12 @@ title: 2026 年程序员必看！5 款高性价比机械键盘横评，从 199 �
 date: 2026-08-21
 tags: [机械键盘, 程序员, 好物推荐, 什么值得买]
 summary: 用了 12 把键盘、踩过 4 次退货坑之后，我把 5 款真正值得买的机械键盘整理成这一篇。每款都标了真实到手价、轴体手感、适合人群，帮你省下选键盘的时间。
-cover: ./cover.png
+cover: http://localhost:3000/cover.jpg
 # 懂车帝等双封面平台专用（其他平台忽略）：
-cover-horizontal: ./cover-horizontal.jpg
-cover-vertical: ./cover-vertical.jpg
+cover-horizontal: http://localhost:3000/cover-horizontal.jpg
+cover-vertical: http://localhost:3000/cover-vertical.jpg
 ---
-
+# 利用serve可以在test中启动一个端口为3000的服务
 # 2026 年程序员必看！5 款高性价比机械键盘横评，从 199 到 1999 全价位
 
 > 本文不是参数表堆砌，是我**自己掏钱买回来、每天敲 8 小时**的真实体验。每一款都有结论：值不值得买、适合谁、不适合谁。
