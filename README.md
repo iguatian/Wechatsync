@@ -6,7 +6,7 @@
 
 **开源免费**的跨平台文章同步工具 | Chrome 浏览器扩展 | 自媒体内容分发神器
 
-一键同步微信公众号文章到知乎、头条、掘金、小红书、CSDN、腾讯内容开放平台、汽车之家、懂车帝、中关村在线 等 33+ 平台，支持 WordPress 等自建博客，告别重复复制粘贴。
+一键同步微信公众号文章到知乎、头条、掘金、小红书、CSDN、腾讯内容开放平台、汽车之家、懂车帝、中关村在线、界面新闻 等 34+ 平台，支持 WordPress 等自建博客，告别重复复制粘贴。
 
 > 🔥 支持 **Anthropic MCP 协议**，可在 Claude Desktop / Claude Code 中通过 AI 一键发布文章
 
@@ -30,7 +30,7 @@
 
 ## 功能特性
 
-- **一键批量发布**: 微信公众号文章同步到知乎、掘金、头条、CSDN、简书、微博、小红书、抖音、汽车之家、懂车帝、中关村在线等 27+ 自媒体平台
+- **一键批量发布**: 微信公众号文章同步到知乎、掘金、头条、CSDN、简书、微博、小红书、抖音、汽车之家、懂车帝、中关村在线、界面新闻等 28+ 自媒体平台
 - **网页转 Markdown**: 任意网页智能提取正文，自动过滤广告噪音，图片本地化，打包为 Markdown + 图片 ZIP 压缩包
 - **自建站支持**: WordPress、Typecho、博客园 (MetaWeblog API)
 - **智能提取**: 自动从网页提取文章标题、内容、封面图（基于 Safari 阅读模式）
@@ -49,7 +49,7 @@
 支持 Chrome / Edge / 360 / QQ 等 Chromium 内核浏览器
 
 
-## 支持 27+ 主流平台
+## 支持 28+ 主流平台
 
 | 平台 | ID | 类型 | 状态 |
 |-----|-----|-----|-----|
@@ -77,6 +77,7 @@
 | 汽车之家 | autohome | 汽车 | ✅ 🆕 |
 | 懂车帝 | dongchedi | 汽车 | ✅ 🆕 |
 | 中关村在线 | zol | 数码科技 | ✅ 🆕 |
+| 界面新闻 | jiemian | 通用 | ✅ 🆕 |
 | 什么值得买 | smzdm | 通用 | ✅ |
 | 网易号 | netease | 通用 | ✅ |
 | 搜狐号 | sohu | 通用 | ✅ |
@@ -94,7 +95,7 @@
 | Hugo | zip-download | 建站/CMS | ✅ 通过 Markdown 下载 | -->
 
 - [提交新平台请求](https://airtable.com/shrLSJMnTC2BlmP29)
-## weixin,zhihu,weibo,xiaohongshu,juejin,csdn,jianshu,toutiao,douyin,qq-content,bilibili,baijiahao,yuque,douban,sohu,xueqiu,woshipm,dayu,yidian,51cto,imooc,oschina,segmentfault,cnblogs,sohufocus,autohome,dongchedi,zol,x,eastmoney,smzdm,netease,wordpress,typecho,zip-download,zip-download
+## weixin,zhihu,weibo,xiaohongshu,juejin,csdn,jianshu,toutiao,douyin,qq-content,bilibili,baijiahao,yuque,douban,sohu,xueqiu,woshipm,dayu,yidian,51cto,imooc,oschina,segmentfault,cnblogs,sohufocus,autohome,dongchedi,zol,jiemian,x,eastmoney,smzdm,netease,wordpress,typecho,zip-download,zip-download
 ### 双封面平台（懂车帝）
 
 懂车帝是典型的双封面平台：信息流推荐位用 **横版**（4:3），图文详情页用 **竖版**（3:4），两者必须分别上传，不能复用同一张图。**懂车帝会忽略通用的 `cover` 字段**，必须用专门的 `cover-horizontal` + `cover-vertical`。
@@ -454,6 +455,10 @@ pnpm build
 
 ## 更新日志
 
+### v2.1.3 (2026-09-02)
+
+- 🆕 新增界面新闻（a.jiemian.com）创作者平台适配器，支持文章同步为草稿。鉴权走 JSONP `getlogin` 接口，封面走 multipart 上传（固定尺寸 840×480），提交流程在投稿前会重新拉取会话级 `verifycode`（CSRF）并 `sendtype=2` 写入草稿箱。投稿资格要求账号 `level >= 2`，不足时服务端通常以 `code:3` 拒绝保存。
+
 ### v2.1.2 (2026-08-28)
 
 - 🆕 新增中关村在线创作者平台适配器，支持图文文章同步为草稿。**双封面平台**（与懂车帝一致）：需要同时提供 `cover-horizontal`（横版 4:3）+ `cover-vertical`（竖版 3:4）两个封面字段，可在 CLI 用 `--cover-horizontal` / `--cover-vertical` 覆盖。读者看到的导读图是后台 `guideImg` 列表的上传结果。
@@ -530,7 +535,7 @@ pnpm build
 
 **Q: 支持同步微信公众号文章吗？**
 
-支持。可以直接从微信公众号编辑器提取文章，一键同步到知乎、头条、掘金等 33+ 平台。支持公众号文章同步到头条号、公众号同步到知乎、微信文章同步到掘金等各种场景。
+支持。可以直接从微信公众号编辑器提取文章，一键同步到知乎、头条、掘金等 34+ 平台。支持公众号文章同步到头条号、公众号同步到知乎、微信文章同步到掘金等各种场景。
 
 **Q: 支持 AI 写作工具吗？**
 
