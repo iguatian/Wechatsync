@@ -92,7 +92,10 @@
 | WordPress | wordpress | 建站/CMS | ✅ |
 | Typecho | typecho | 建站/CMS | ✅ |
 | Hexo | zip-download | 建站/CMS | ✅ 通过 Markdown 下载 |
-| Hugo | zip-download | 建站/CMS | ✅ 通过 Markdown 下载 | -->
+| Hugo | zip-download | 建站/CMS | ✅ 通过 Markdown 下载 | 
+it之家只有移动端才能发布
+
+-->
 
 - [提交新平台请求](https://airtable.com/shrLSJMnTC2BlmP29)
 ## weixin,zhihu,weibo,xiaohongshu,juejin,csdn,jianshu,toutiao,douyin,qq-content,bilibili,baijiahao,yuque,douban,sohu,xueqiu,woshipm,dayu,yidian,51cto,imooc,oschina,segmentfault,cnblogs,sohufocus,autohome,dongchedi,zol,jiemian,x,eastmoney,smzdm,netease,wordpress,typecho,zip-download,zip-download
