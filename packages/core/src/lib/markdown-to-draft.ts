@@ -20,6 +20,8 @@ export interface DoubanImageData {
   height?: number
   file_name?: string
   file_size?: number
+  /** 图片主色调 (hex，不含 #)，如 "48b0e0" */
+  primary_color?: string
 }
 
 /**

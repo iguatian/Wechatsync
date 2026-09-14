@@ -15,7 +15,7 @@ coverage
 !.vscode/extensions.json
 .idea/
 *.iml
-
+/.playwright-cli/
 # TypeScript compiled files
 packages/*/src/**/*.js
 packages/*/src/**/*.js.map

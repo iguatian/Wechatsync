@@ -49,7 +49,7 @@
 支持 Chrome / Edge / 360 / QQ 等 Chromium 内核浏览器
 
 
-## 支持 28+ 主流平台
+## 支持 31+ 主流平台
 
 | 平台 | ID | 类型 | 状态 |
 |-----|-----|-----|-----|
@@ -67,7 +67,7 @@
 | 百家号 | baijiahao | 通用 | ✅ |
 | 语雀 | yuque | 技术社区 | ✅ |
 | 人人都是产品经理 | woshipm | 产品 | ✅ |
-| 大鱼号 | dayu | 通用 | ✅ |
+| 大鱼号（uc头条） | dayu | 通用 | ✅ |
 | 一点号 | yidian | 通用 | ✅ |
 | 51CTO | 51cto | 技术社区 | ✅ |
 | 慕课网 | imooc | 技术社区 | ✅ |
@@ -81,13 +81,15 @@
 | 什么值得买 | smzdm | 通用 | ✅ |
 | 网易号 | netease | 通用 | ✅ |
 | 搜狐号 | sohu | 通用 | ✅ |
+| 豆瓣 | douban | 通用 | ✅ |
+| 东方财富 | eastmoney | 财经 | ✅ |
+| 雪球 | xueqiu | 财经 | ✅ |
+
 
 <!-- 暂时不用支持 -->
 | 搜狐焦点 | sohufocus | 房产 | ✅ |
-| 雪球 | xueqiu | 财经 | ✅ |
-| 东方财富 | eastmoney | 财经 | ✅ |
 <!-- 不用支持 -->
-<!-- | 豆瓣 | douban | 通用 | ✅ |
+<!-- 
 | X (Twitter) | x | 海外 | ✅ |
 | WordPress | wordpress | 建站/CMS | ✅ |
 | Typecho | typecho | 建站/CMS | ✅ |

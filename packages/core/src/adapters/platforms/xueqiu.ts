@@ -22,7 +22,7 @@ export class XueqiuAdapter extends CodeAdapter {
     name: '雪球',
     icon: 'https://xqdoc.imedao.com/17aebcfb84a145d33fc18679.ico',
     homepage: 'https://mp.xueqiu.com/writeV2',
-    capabilities: ['article', 'draft', 'image_upload'],
+    capabilities: ['article', 'draft', 'image_upload', 'cover'],
   }
 
   /** 预处理配置: 雪球使用 Markdown 格式 */
@@ -168,52 +168,110 @@ export class XueqiuAdapter extends CodeAdapter {
 
       const content = rendered
 
-      // 4. 保存草稿
-      const formData = new URLSearchParams({
+      // 4. 先创建草稿拿到 draftId
+      //    注意：雪球「新建草稿」这一步不会写入 cover_pic，
+      //    必须先创建拿到 id，再带 id 保存一次封面才会生效（对齐网页端编辑器流程）。
+      const createParams = new URLSearchParams({
         text: content,
         title: article.title,
         cover_pic: '',
         flags: 'false',
         original_event: '',
-        status_id: '',
         legal_user_visible: 'false',
         is_private: 'false',
+        allow_reward: 'false',
       })
 
-      const response = await this.runtime.fetch(
-        'https://mp.xueqiu.com/xq/statuses/draft/save.json',
-        {
-          method: 'POST',
-          credentials: 'include',
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-          },
-          body: formData,
+      const createRes = await this.saveDraft(createParams)
+      logger.debug(' Create draft response:', createRes)
+
+      if (!createRes.id) {
+        throw new Error(createRes.error_description || '保存失败')
+      }
+
+      const postId = createRes.id
+
+      // 5. 上传封面图（仅当有 cover 时）
+      let coverUrl = ''
+      let coverError = ''
+      if (article.cover) {
+        try {
+          const coverResult = await this.uploadImageByUrl(article.cover)
+          // 雪球接口 cover_pic 使用协议相对地址（//xqimg.imedao.com/xxx.png），
+          // 与网页端编辑器保持一致；带 https: 前缀会导致封面无法显示。
+          coverUrl = coverResult.url.replace(/^https?:/, '')
+          logger.debug('Cover uploaded:', coverUrl)
+        } catch (e) {
+          coverError = (e as Error).message
+          logger.warn('Failed to upload cover:', e)
         }
-      )
-
-      const res = await response.json() as {
-        id?: string | number
-        error_description?: string
       }
 
-      logger.debug(' Save response:', res)
-
-      if (!res.id) {
-        throw new Error(res.error_description || '保存失败')
+      // 6. 带 id 再保存一次，把封面写入已有草稿
+      if (coverUrl) {
+        const updateParams = new URLSearchParams({
+          id: String(postId),
+          text: content,
+          title: article.title,
+          cover_pic: coverUrl,
+          flags: 'false',
+          original_event: '',
+          legal_user_visible: 'false',
+          is_private: 'false',
+          allow_reward: 'false',
+        })
+        const updateRes = await this.saveDraft(updateParams)
+        logger.debug(' Update draft(cover) response:', updateRes)
       }
 
-      const postId = res.id
       const draftUrl = `https://mp.xueqiu.com/write/draft/${postId}`
+
+      // 封面图诊断信息：通过 MCP 全链路透传到上层发布方，
+      // 便于直接看到封面图上传成功与否及其原因。
+      const coverDiagnostics = {
+        coverUploaded: !!coverUrl,
+        coverUrl: coverUrl || undefined,
+        coverError: coverError || undefined,
+      }
+      const extra = coverError
+        ? { error: `封面图上传失败: ${coverError}`, ...coverDiagnostics }
+        : coverDiagnostics
 
       return this.createResult(true, {
         postId: String(postId),
         postUrl: draftUrl,
         draftOnly: options?.draftOnly ?? true,
+        ...extra,
       })
     }).catch((error) => this.createResult(false, {
       error: (error as Error).message,
     }))
+  }
+
+  /**
+   * 调用雪球草稿保存接口
+   * @param params 表单参数（新建时不带 id，更新封面时带 id/status_id）
+   */
+  private async saveDraft(params: URLSearchParams): Promise<{
+    id?: string | number
+    error_description?: string
+  }> {
+    const response = await this.runtime.fetch(
+      'https://mp.xueqiu.com/xq/statuses/draft/save.json',
+      {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: params,
+      }
+    )
+
+    return await response.json() as {
+      id?: string | number
+      error_description?: string
+    }
   }
 
   /**
