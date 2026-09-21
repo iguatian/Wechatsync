@@ -57,6 +57,17 @@ const ADAPTERS = [
       ' */',
     ],
   },
+  {
+    className: 'KuaichuanAdapter',
+    srcFile: path.join(SRC_DIR, 'adapters', 'platforms', 'kuaichuan.ts'),
+    doc: [
+      '/**',
+      ' * 快传号（360 自媒体平台，kuaichuan.360kuai.com）适配器',
+      ' *',
+      ' * @see ./kuaichuan 源文件查看完整实现与 API 说明',
+      ' */',
+    ],
+  },
 ]
 
 /**
