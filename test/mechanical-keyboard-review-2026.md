@@ -8,7 +8,7 @@ cover: http://localhost:3000/cover.jpg
 cover-horizontal: http://localhost:3000/cover-horizontal.jpg
 cover-vertical: http://localhost:3000/cover-vertical.jpg
 ---
-# 利用serve可以在test中启动一个端口为3000的服务
+
 # 2026 年程序员必看！5 款高性价比机械键盘横评，从 199 到 1999 全价位
 
 > 本文不是参数表堆砌，是我**自己掏钱买回来、每天敲 8 小时**的真实体验。每一款都有结论：值不值得买、适合谁、不适合谁。

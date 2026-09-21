@@ -157,8 +157,15 @@ export class WeiboAdapter extends CodeAdapter {
       let coverUrl = ''
       if (article.cover) {
         try {
+          logger.debug(
+            'Preparing cover:',
+            article.cover.startsWith('data:')
+              ? `(本地图片 data URI, 长度 ${article.cover.length})`
+              : article.cover
+          )
           const coverResult = await this.uploadImageByUrl(article.cover)
           coverUrl = coverResult.url
+          logger.debug('Cover ready:', coverUrl)
         } catch (e) {
           logger.warn('Failed to upload cover:', e)
         }
@@ -241,7 +248,27 @@ export class WeiboAdapter extends CodeAdapter {
     return result.slice(0, 43)
   }
 
+  /** 判断是否为微博自家图床地址（sinaimg / weibo） */
+  private isWeiboImageUrl(src: string): boolean {
+    return /sinaimg\.cn|weibo\.com/i.test(src)
+  }
+
+  /** 从微博图床 URL 中提取 pid，失败返回空串 */
+  private extractWeiboPid(src: string): string {
+    const m = src.match(/\/([A-Za-z0-9]{8,})\.(?:jpe?g|png|gif|webp)(?:[?#]|$)/i)
+    return m?.[1] || ''
+  }
+
   protected async uploadImageByUrl(src: string): Promise<ImageUploadResult> {
+    // 微博自家图床（sinaimg.cn / weibo.com）的图片无需再次上传，直接复用原地址。
+    // 典型场景：从微博同步过来的文章，正文图和封面图都已在微博图床；若不短路，
+    // 封面会走 asyncuploadimg 让微博「抓取并上传」自家图片，服务端会返回
+    // task_status_code=2（失败），日志表现为 “Failed to upload cover: 图片上传失败”。
+    if (this.isWeiboImageUrl(src)) {
+      logger.debug('Reusing existing weibo image:', src)
+      return { url: src, attrs: { 'data-pid': this.extractWeiboPid(src) } }
+    }
+
     if (src.startsWith('data:')) {
       logger.debug('Uploading data URI image via direct upload')
       return this.uploadDataUri(src)
@@ -275,15 +302,27 @@ export class WeiboAdapter extends CodeAdapter {
       logger.warn('Async upload request failed, will try polling anyway:', e)
     }
 
-    const imgDetail = await this.waitForImageDone(src)
-    const imgUrl = `https://wx3.sinaimg.cn/large/${imgDetail.pid}.jpg`
+    try {
+      const imgDetail = await this.waitForImageDone(src)
+      const imgUrl = `https://wx3.sinaimg.cn/large/${imgDetail.pid}.jpg`
 
-    return {
-      url: imgUrl,
-      attrs: {
-        'data-pid': imgDetail.pid,
-      },
+      return {
+        url: imgUrl,
+        attrs: {
+          'data-pid': imgDetail.pid,
+        },
+      }
+    } catch (e) {
+      // 异步上传失败：微博服务端抓取外链可能被防盗链/超时/非公开地址拦截。
+      // 降级为「本地下载图片 → 直传 picupload」，避免封面或正文图直接丢失。
+      logger.warn(`Async upload failed for ${src}, fallback to direct upload:`, e)
     }
+
+    const blob = await this.fetchImageBlob(src)
+    if (!blob) {
+      throw new Error('图片上传失败')
+    }
+    return this.uploadBlob(blob)
   }
 
   async uploadImageBase64(imageData: string, mimeType: string): Promise<ImageUploadResult> {
@@ -307,7 +346,32 @@ export class WeiboAdapter extends CodeAdapter {
     }
     const blob = new Blob([bytes], { type: mimeType })
 
-    logger.debug(`Uploading blob: ${mimeType}, size: ${blob.size}`)
+    return this.uploadBlob(blob)
+  }
+
+  /** 下载远程图片为 Blob（失败返回 null，不抛错），用于异步上传失败后的降级直传 */
+  private async fetchImageBlob(src: string): Promise<Blob | null> {
+    try {
+      const res = await this.runtime.fetch(src, { credentials: 'omit' })
+      if (!res.ok) {
+        logger.warn(`Fallback download failed: HTTP ${res.status} ${src}`)
+        return null
+      }
+      const blob = await res.blob()
+      if (!blob || blob.size === 0) {
+        logger.warn(`Fallback download got empty blob: ${src}`)
+        return null
+      }
+      return blob
+    } catch (e) {
+      logger.warn('Fallback download failed:', e)
+      return null
+    }
+  }
+
+  /** 直传二进制到微博 picupload，返回图床 URL */
+  private async uploadBlob(blob: Blob): Promise<ImageUploadResult> {
+    logger.debug(`Uploading blob: ${blob.type}, size: ${blob.size}`)
 
     const reqId = this.generateReqId()
     const uploadUrl = `https://picupload.weibo.com/interface/pic_upload.php?app=miniblog&s=json&p=1&data=1&url=&markpos=1&logo=0&nick=&file_source=4&_rid=${reqId}`
@@ -389,8 +453,25 @@ export class WeiboAdapter extends CodeAdapter {
     for (const { full, src, hasFigure } of matches) {
       if (!src) continue
 
-      if (src.includes('sinaimg.cn') || src.includes('weibo.com')) {
-        logger.debug(`Skipping weibo image: ${src}`)
+      if (this.isWeiboImageUrl(src)) {
+        // 微博图床图片不需要重新上传，但正文 HTML 必须带 data-pid —— 微博编辑器
+        // 是据此渲染图片节点的，没有 pid 的 <img> 在草稿里会是空白。
+        // 而预处理阶段 removeDataAttributes（content-processor.ts）会剥掉所有
+        // data-* 属性，原始 data-pid 已丢失，所以这里按 URL 重新补回，并统一成
+        // 微博编辑器的图片结构。
+        const pid = this.extractWeiboPid(src)
+        if (pid) {
+          const replacement = hasFigure
+            ? full.replace(
+              /<img[^>]+src="[^"]+"[^>]*>/i,
+              `<img src="${src}" data-pid="${pid}" />`
+            )
+            : `<figure class="image"><img src="${src}" data-pid="${pid}" /></figure>`
+          result = result.replace(full, replacement)
+          logger.debug(`Normalized weibo image (reuse pid ${pid}): ${src}`)
+        } else {
+          logger.debug(`Skipping weibo image (cannot parse pid): ${src}`)
+        }
         continue
       }
 
