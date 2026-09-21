@@ -35,9 +35,11 @@ if ((result.status ?? 1) !== 0) {
   process.exit(result.status ?? 1)
 }
 
-// DTS 后处理：tsup 8.5.1 在 DTS bundling 时会丢掉 jiemian.ts（原因不明，
-// ESM bundle 包含 JiemianAdapter，但 DTS 不包含）。fix-dts.js 通过 TS Compiler API
-// 同步生成 jiemian.d.ts 并合并到 dist/adapters/index.{d.ts,d.mts} 与 dist/index.{d.ts,d.mts}。
+// DTS 后处理：tsup 8.5.1 在 DTS bundling 时会丢掉"最新新增的适配器"（原因不明，
+// ESM/CJS bundle 包含该 adapter 类，但 DTS 不包含；先是 jiemian.ts，现在是 sspai.ts）。
+// fix-dts.js 通过 TS Compiler API 同步生成对应 d.ts 并合并到
+// dist/adapters/index.{d.ts,d.mts} 与 dist/index.{d.ts,d.mts}（新增适配器时同步更新
+// fix-dts.js 里的 ADAPTERS 列表）。
 // 直接 require 调用（而非 spawn 子进程）以兼容 PowerShell 沙箱环境。
 let fixPatched = 0
 try {
