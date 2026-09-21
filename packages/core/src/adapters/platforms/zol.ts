@@ -213,36 +213,42 @@ export class ZolAdapter extends CodeAdapter {
    * - errcode === 100045 即未登录
    *
    * 路径：
-   * 1. 扩展环境优先走 post.zol.com.cn 页面上下文（Origin 自动正确）
+   * 1. 扩展环境且已存在 post.zol.com.cn tab 时走页面上下文（Origin 自动正确）
    * 2. SW fetch + headerRules（DNR 注入 Origin）兜底，供无 tab 场景（popup 批量检查）使用
    * 3. Node 环境直接 fetch（显式 Origin/Referer 头）
+   *
+   * ⚠️ 本方法不会创建 tab（否则扩展启动预检会自动打开创建页）。
    */
   async checkAuth(): Promise<AuthResult> {
     const runtimeTabs = this.runtime.tabs
 
-    // 扩展环境：优先页面上下文
+    // 扩展环境：仅在已存在 post.zol.com.cn tab 时走页面上下文。
+    // ⚠️ checkAuth 会在扩展启动/弹窗时被批量调用，绝不能主动创建 tab，
+    //    否则每次加载扩展都会自动弹出 ZOL 创建页。无 tab 时直接走 SW fetch 兜底。
     if (runtimeTabs) {
-      try {
-        const tabId = await this.ensureZolTab()
-        const result = await runtimeTabs.executeScript<
-          { ok: boolean; notLoggedIn?: boolean; userId?: string; username?: string; error?: string },
-          [string]
-        >(tabId, fetchUserInfoInTabScript, [USER_INFO_URL])
+      const tabId = await this.findZolTab()
+      if (tabId !== null) {
+        try {
+          const result = await runtimeTabs.executeScript<
+            { ok: boolean; notLoggedIn?: boolean; userId?: string; username?: string; error?: string },
+            [string]
+          >(tabId, fetchUserInfoInTabScript, [USER_INFO_URL])
 
-        if (result.ok) {
-          return {
-            isAuthenticated: true,
-            userId: result.userId,
-            username: result.username || undefined,
+          if (result.ok) {
+            return {
+              isAuthenticated: true,
+              userId: result.userId,
+              username: result.username || undefined,
+            }
           }
+          if (result.notLoggedIn) {
+            return { isAuthenticated: false, error: '请先登录中关村在线创作者平台（https://post.zol.com.cn/）' }
+          }
+          // 其他错误（网络/页面异常）降级到 SW fetch 再试一次
+          logger.debug('checkAuth page-context failed, fallback to SW fetch:', result.error)
+        } catch (error) {
+          logger.debug('checkAuth page-context error, fallback to SW fetch:', error)
         }
-        if (result.notLoggedIn) {
-          return { isAuthenticated: false, error: '请先登录中关村在线创作者平台（https://post.zol.com.cn/）' }
-        }
-        // 其他错误（网络/页面异常）降级到 SW fetch 再试一次
-        logger.debug('checkAuth page-context failed, fallback to SW fetch:', result.error)
-      } catch (error) {
-        logger.debug('checkAuth page-context error, fallback to SW fetch:', error)
       }
     }
 
@@ -650,19 +656,38 @@ export class ZolAdapter extends CodeAdapter {
 
   // ============ Tab 管理 ============
 
-  /** 确保存在 post.zol.com.cn tab（用于在页面上下文发起请求） */
+  /** 查找已存在的 post.zol.com.cn tab（无任何副作用，不会新建 tab） */
+  private async findZolTab(): Promise<number | null> {
+    const runtimeTabs = this.runtime.tabs
+    if (!runtimeTabs) return null
+    try {
+      const tabs = await runtimeTabs.query('*://post.zol.com.cn/*')
+      const firstTab = tabs[0]
+      if (firstTab && firstTab.id !== undefined) {
+        return firstTab.id
+      }
+      return null
+    } catch (error) {
+      logger.debug('[Zol] 查询 post.zol.com.cn tab 失败：', error)
+      return null
+    }
+  }
+
+  /**
+   * 确保存在 post.zol.com.cn tab（用于在页面上下文发起请求）
+   *
+   * ⚠️ 会创建新 tab，仅用于发布流程；鉴权检查请使用 findZolTab()。
+   */
   private async ensureZolTab(): Promise<number> {
     const runtimeTabs = this.runtime.tabs
     if (!runtimeTabs) {
       throw new Error('中关村在线需要扩展 tabs API 支持')
     }
 
-    const urlPattern = '*://post.zol.com.cn/*'
-    const tabs = await runtimeTabs.query(urlPattern)
-    const firstTab = tabs[0]
-    if (firstTab && firstTab.id !== undefined) {
-      logger.debug(`[Zol] 复用已存在的 post.zol.com.cn tab: ${firstTab.id}`)
-      return firstTab.id
+    const existing = await this.findZolTab()
+    if (existing !== null) {
+      logger.debug(`[Zol] 复用已存在的 post.zol.com.cn tab: ${existing}`)
+      return existing
     }
 
     logger.info('[Zol] 没有 post.zol.com.cn tab，在后台打开创建页...')
