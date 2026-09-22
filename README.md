@@ -6,7 +6,7 @@
 
 **开源免费**的跨平台文章同步工具 | Chrome 浏览器扩展 | 自媒体内容分发神器
 
-一键同步微信公众号文章到知乎、头条、掘金、小红书、CSDN、腾讯内容开放平台、汽车之家、懂车帝、中关村在线、界面新闻、少数派、快传号 等 34+ 平台，支持 WordPress 等自建博客，告别重复复制粘贴。
+一键同步微信公众号文章到知乎、头条、掘金、小红书、CSDN、腾讯内容开放平台、汽车之家、懂车帝、中关村在线、界面新闻、少数派、快传号、潮新闻 等 34+ 平台，支持 WordPress 等自建博客，告别重复复制粘贴。
 
 > 🔥 支持 **Anthropic MCP 协议**，可在 Claude Desktop / Claude Code 中通过 AI 一键发布文章
 
@@ -30,7 +30,7 @@
 
 ## 功能特性
 
-- **一键批量发布**: 微信公众号文章同步到知乎、掘金、头条、CSDN、简书、微博、小红书、抖音、汽车之家、懂车帝、中关村在线、界面新闻、少数派、快传号等 28+ 自媒体平台
+- **一键批量发布**: 微信公众号文章同步到知乎、掘金、头条、CSDN、简书、微博、小红书、抖音、汽车之家、懂车帝、中关村在线、界面新闻、少数派、快传号、潮新闻等 28+ 自媒体平台
 - **网页转 Markdown**: 任意网页智能提取正文，自动过滤广告噪音，图片本地化，打包为 Markdown + 图片 ZIP 压缩包
 - **自建站支持**: WordPress、Typecho、博客园 (MetaWeblog API)
 - **智能提取**: 自动从网页提取文章标题、内容、封面图（基于 Safari 阅读模式）
@@ -49,7 +49,7 @@
 支持 Chrome / Edge / 360 / QQ 等 Chromium 内核浏览器
 
 
-## 支持 33+ 主流平台
+## 支持 34+ 主流平台
 
 | 平台 | ID | 类型 | 状态 |
 |-----|-----|-----|-----|
@@ -80,6 +80,7 @@
 | 界面新闻 | jiemian | 通用 | ✅ 🆕 |
 | 少数派 | sspai | 内容社区 | ✅ 🆕 |
 | 快传号（360） | kuaichuan | 通用 | ✅ 🆕 |
+| 潮新闻（潮鸣号） | tidenews | 通用 | ✅ 🆕 |
 | 什么值得买 | smzdm | 通用 | ✅ |
 | 网易号 | netease | 通用 | ✅ |
 | 搜狐号 | sohu | 通用 | ✅ |
@@ -102,7 +103,7 @@ it之家只有移动端才能发布
 -->
 
 - [提交新平台请求](https://airtable.com/shrLSJMnTC2BlmP29)
-## weixin,zhihu,weibo,xiaohongshu,juejin,csdn,jianshu,toutiao,douyin,qq-content,bilibili,baijiahao,yuque,douban,sohu,xueqiu,woshipm,dayu,yidian,51cto,imooc,oschina,segmentfault,cnblogs,sohufocus,autohome,dongchedi,zol,jiemian,sspai,kuaichuan,x,eastmoney,smzdm,netease,wordpress,typecho,zip-download,zip-download
+## weixin,zhihu,weibo,xiaohongshu,juejin,csdn,jianshu,toutiao,douyin,qq-content,bilibili,baijiahao,yuque,douban,sohu,xueqiu,woshipm,dayu,yidian,51cto,imooc,oschina,segmentfault,cnblogs,sohufocus,autohome,dongchedi,zol,jiemian,sspai,kuaichuan,tidenews,x,eastmoney,smzdm,netease,wordpress,typecho,zip-download,zip-download
 ### 双封面平台（懂车帝）
 
 懂车帝是典型的双封面平台：信息流推荐位用 **横版**（4:3），图文详情页用 **竖版**（3:4），两者必须分别上传，不能复用同一张图。**懂车帝会忽略通用的 `cover` 字段**，必须用专门的 `cover-horizontal` + `cover-vertical`。
@@ -461,6 +462,12 @@ pnpm build
 然后在 Chrome 中加载 `packages/extension/dist` 目录。
 
 ## 更新日志
+
+### v2.1.6 (2026-09-22)
+
+- 🆕 新增潮新闻 · 潮鸣号（创作者平台 `cmh.8531.cn/creatorPlatform`）适配器，支持同步为草稿。鉴权不依赖 Cookie：登录 token 与账号 ID 存在后台页面 localStorage（`creator-authenticate` / `creator-tmy3-username`），请求统一带 `Authorization: Bearer <token>` + `X-tmy-username` + `X-tmy-media-source` + `X-Source` 四个头（缺 token 时网关返回 HTTP 401）。图片走后台编辑器同款三步：`img/uploadToken` 取凭证 → 阿里云 OSS 直传 → `img/complete` 落库拿签名地址；保存草稿走 `createOrUpdate`（`draftsStatus=1`、`fileType=-4`），正文按编辑器产物套 `<div class="creator-platform-content">` 外壳。草稿编辑页为 hash 路由：`#/create/image-text?id=<id>`。
+- 🔧 正文插图必须写对两处，否则草稿里只剩 403 的裸地址（已实测复现并修复）：① 标签形态与后台编辑器**逐字节一致**（`&` 转义为 `&amp;`、结尾用 `>` 而非 ` />`）；② **落在潮鸣号私有桶 `mc-gxlmmz-private.8531.cn` 的图片必须带 `creator-media-id`**。原因：服务端保存正文时会把 `src` 的 query 抹掉，读取时再按 `creator-media-id` 重新签名（封面同理、走 `coverId`，所以封面一直正常）；没有 id 就无法重签，而私有桶不带签名必然 `403 AccessDenied`。另外 CLI 同步本地 Markdown 时会先把本地图片预上传到「图床」（默认取第一个同步平台，即本适配器的 `uploadImage()`），回填正文的正是这种私有桶签名地址，适配器会直接从 `<id>.<ext>` 路径里复用素材 id、不再重复转存。
+- 🔧 修复同步前「图床预上传」必然失败的问题：CLI/MCP 在 publish 之前就会调用 `uploadImage()` 预上传本地图片，而此时浏览器里通常还没有 `cmh.8531.cn` 标签页，该站登录态又只存在页面 localStorage（无 Cookie 兜底）——现在 `uploadImage()` 同样允许按需打开一次后台 tab 读取登录态，不再报「未登录」并退回内嵌 data URI。
 
 ### v2.1.5 (2026-09-21)
 

@@ -37,5 +37,6 @@ export { ZolAdapter } from './zol'
 export { JiemianAdapter } from './jiemian'
 export { SspaiAdapter } from './sspai'
 export { KuaichuanAdapter } from './kuaichuan'
+export { TidenewsAdapter } from './tidenews'
 // FIXME: 适配器文件尚未实现，临时注释以通过构建
 // export { XAdapter } from './x'

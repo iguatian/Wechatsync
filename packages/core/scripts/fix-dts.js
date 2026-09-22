@@ -68,6 +68,17 @@ const ADAPTERS = [
       ' */',
     ],
   },
+  {
+    className: 'TidenewsAdapter',
+    srcFile: path.join(SRC_DIR, 'adapters', 'platforms', 'tidenews.ts'),
+    doc: [
+      '/**',
+      ' * 潮新闻 · 潮鸣号（创作者平台，cmh.8531.cn）适配器',
+      ' *',
+      ' * @see ./tidenews 源文件查看完整实现与 API 说明',
+      ' */',
+    ],
+  },
 ]
 
 /**
