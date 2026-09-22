@@ -60,6 +60,7 @@ import {
   SspaiAdapter,
   KuaichuanAdapter,
   TidenewsAdapter,
+  JianghuAdapter,
   // FIXME: 适配器文件尚未实现，临时注释以通过构建
   // XAdapter,
 } from '@wechatsync/core'
@@ -133,6 +134,7 @@ const ADAPTER_CLASSES: AdapterConstructor[] = [
   SspaiAdapter,
   KuaichuanAdapter,
   TidenewsAdapter,
+  JianghuAdapter,
   // FIXME: 适配器文件尚未实现，临时注释以通过构建
   // XAdapter,
   ...getPrivateAdapters(),

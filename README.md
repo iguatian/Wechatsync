@@ -80,7 +80,8 @@
 | 界面新闻 | jiemian | 通用 | ✅ 🆕 |
 | 少数派 | sspai | 内容社区 | ✅ 🆕 |
 | 快传号（360） | kuaichuan | 通用 | ✅ 🆕 |
-| 潮新闻（潮鸣号） | tidenews | 通用 | ✅ 🆕 |
+| 潮新闻（潮鸣号、浙江） | tidenews | 通用 | ✅ 🆕 |
+| 淘江湖（淘宝社区） | jianghu | 内容社区 | ✅ 🆕 |
 | 什么值得买 | smzdm | 通用 | ✅ |
 | 网易号 | netease | 通用 | ✅ |
 | 搜狐号 | sohu | 通用 | ✅ |
@@ -103,7 +104,7 @@ it之家只有移动端才能发布
 -->
 
 - [提交新平台请求](https://airtable.com/shrLSJMnTC2BlmP29)
-## weixin,zhihu,weibo,xiaohongshu,juejin,csdn,jianshu,toutiao,douyin,qq-content,bilibili,baijiahao,yuque,douban,sohu,xueqiu,woshipm,dayu,yidian,51cto,imooc,oschina,segmentfault,cnblogs,sohufocus,autohome,dongchedi,zol,jiemian,sspai,kuaichuan,tidenews,x,eastmoney,smzdm,netease,wordpress,typecho,zip-download,zip-download
+## weixin,zhihu,weibo,xiaohongshu,juejin,csdn,jianshu,toutiao,douyin,qq-content,bilibili,baijiahao,yuque,douban,sohu,xueqiu,woshipm,dayu,yidian,51cto,imooc,oschina,segmentfault,cnblogs,sohufocus,autohome,dongchedi,zol,jiemian,sspai,kuaichuan,tidenews,jianghu,x,eastmoney,smzdm,netease,wordpress,typecho,zip-download,zip-download
 ### 双封面平台（懂车帝）
 
 懂车帝是典型的双封面平台：信息流推荐位用 **横版**（4:3），图文详情页用 **竖版**（3:4），两者必须分别上传，不能复用同一张图。**懂车帝会忽略通用的 `cover` 字段**，必须用专门的 `cover-horizontal` + `cover-vertical`。
@@ -462,6 +463,10 @@ pnpm build
 然后在 Chrome 中加载 `packages/extension/dist` 目录。
 
 ## 更新日志
+
+### v2.1.7 (2026-09-22)
+
+- 🆕 新增淘江湖（淘宝社区 `jianghu.taobao.com/editor.html`）适配器。**注意：该平台没有服务端草稿接口**（编辑器里的「草稿」只是 `localStorage["bbs_publish"]` 的本地缓存），所以同步是**直接发布**、`draftOnly` 恒为 false，提交后进入平台审核。鉴权为淘宝账号 SSO（`.taobao.com` 的 `unb` cookie）；发布走淘宝 mtop（`mtop.taobao.bbs.edit.content.post`，`title` / `topicId` / `userInputTags` / `content` / `pattern=5` / `host` 字段与编辑器逐字段一致），为避免自己实现 `md5(token&t&appKey&data)` 签名与绕过安全 SDK，接口调用在 `jianghu.taobao.com` 标签页的 MAIN world 里通过页面自带的 `window.lib.mtop.request()` 发起（与 autohome / douyin 同款做法）。**必须选择发布板块**：适配器先拉 `mtop.taobao.bbs.topic.list.get`，用 `category` / `tags` 去匹配板块或子分类名，匹配不到则回退到站点通用板块（茶馆 → 闲唠八卦），并在结果 message 里回显所落板块。图片走 `stream-upload.taobao.com/api/upload.api?appkey=taojianghu_pic_upload`（multipart：`name` + `file`，返回 `img.alicdn.com` 地址），同样在页面上下文发起以对齐 Origin/Referer。标题受平台限制会截断到 50 字。（发布请求体已用抓包逐字段复验：`{"title":"<encodeURI>","topicId":123101,"userInputTags":"[]","content":"<encodeURI(JSON.stringify({title,content}))>","pattern":5,"host":"jianghu.taobao.com"}`；该请求还带 `bx-ua`/`bx-umidtoken`/`bx_et` 风控字段，故必须走页面 MAIN world。）
 
 ### v2.1.6 (2026-09-22)
 

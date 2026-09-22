@@ -79,6 +79,17 @@ const ADAPTERS = [
       ' */',
     ],
   },
+  {
+    className: 'JianghuAdapter',
+    srcFile: path.join(SRC_DIR, 'adapters', 'platforms', 'jianghu.ts'),
+    doc: [
+      '/**',
+      ' * 淘江湖（淘宝社区，jianghu.taobao.com）适配器',
+      ' *',
+      ' * @see ./jianghu 源文件查看完整实现与 API 说明',
+      ' */',
+    ],
+  },
 ]
 
 /**
