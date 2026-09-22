@@ -6,7 +6,7 @@
 
 **开源免费**的跨平台文章同步工具 | Chrome 浏览器扩展 | 自媒体内容分发神器
 
-一键同步微信公众号文章到知乎、头条、掘金、小红书、CSDN、腾讯内容开放平台、汽车之家、懂车帝、中关村在线、界面新闻、少数派、快传号、潮新闻 等 34+ 平台，支持 WordPress 等自建博客，告别重复复制粘贴。
+一键同步微信公众号文章到知乎、头条、掘金、小红书、CSDN、腾讯内容开放平台、汽车之家、懂车帝、中关村在线、界面新闻、少数派、快传号、潮新闻 等 36+ 平台，支持 WordPress 等自建博客，告别重复复制粘贴。
 
 > 🔥 支持 **Anthropic MCP 协议**，可在 Claude Desktop / Claude Code 中通过 AI 一键发布文章
 
@@ -49,7 +49,7 @@
 支持 Chrome / Edge / 360 / QQ 等 Chromium 内核浏览器
 
 
-## 支持 34+ 主流平台
+## 支持 36+ 主流平台
 
 | 平台 | ID | 类型 | 状态 |
 |-----|-----|-----|-----|
@@ -80,8 +80,9 @@
 | 界面新闻 | jiemian | 通用 | ✅ 🆕 |
 | 少数派 | sspai | 内容社区 | ✅ 🆕 |
 | 快传号（360） | kuaichuan | 通用 | ✅ 🆕 |
-| 潮新闻（潮鸣号、浙江） | tidenews | 通用 | ✅ 🆕 |
+| 潮新闻（潮鸣号-浙江） | tidenews | 通用 | ✅ 🆕 |
 | 淘江湖（淘宝社区） | jianghu | 内容社区 | ✅ 🆕 |
+| 彩龙社区（昆明信息港） | cailong | 内容社区 | ✅ 🆕 |
 | 什么值得买 | smzdm | 通用 | ✅ |
 | 网易号 | netease | 通用 | ✅ |
 | 搜狐号 | sohu | 通用 | ✅ |
@@ -464,6 +465,10 @@ pnpm build
 
 ## 更新日志
 
+### v2.1.8 (2026-09-22)
+
+- 🆕 新增彩龙社区（昆明信息港社区，图文编辑器 `www.clzg.cn/iarticle`）适配器，支持同步为草稿。该站是 Nuxt（Vue2 + Apollo）单页应用，所有业务请求走**同一个 GraphQL 端点** `POST https://bff.clzg.cn/graphql`（以 `operationName` 区分）：鉴权 `getUserInfo`（`user_info.uid` 非空即已登录），发布 `mutation postThread → add_article`（`is_draft:1` 存草稿 / `0` 直接发布，`error:2003 = 已保存草稿`，返回的 `data` 即文章 tid）。**鉴权有三个必需的自定义头**：`appid: clzg6hg9j49zbtsqgdza`、`uuid: <cookie clzg_uuid>`（缺失时生成一个并持久化）以及 `Authorization: Bearer <cookie Authorization>` —— 第三个尤其容易漏：站点 apollo 的 `getAuth` 会把 `Authorization` cookie 显式转成请求头，抓包 HAR 里看不到它是因为该 HAR 已被脱敏（`request.cookies` 为空、全文件无任何 `Set-Cookie`），只带 Cookie 不带该头服务端会返回「请先登录后再操作」；适配器用 `chrome.cookies` 读取该 cookie 后显式转成请求头（不受 SameSite 限制、也能读 httpOnly）。图片走编辑器同款**阿里云 OSS 直传**：GraphQL `ossAuth` 取凭证（`fetchPolicy: network-only`，每次重新取）→ `POST <host>`（multipart 字段顺序 `key` / `policy` / `OSSAccessKeyId` / `success_action_status` / `signature` / `callback` / `file`，需注意 policy 条件限制 `Content-Type` 必须以 `image/` 开头，否则 403）→ 响应 `url` 即 `statics.clzg.cn` 最终地址。正文按编辑器 `submitContent()` 的产物序列化：`content` 是**块数组的 JSON 字符串**，整篇 HTML 放进单个块的 `content_text`（该编辑器插入的图片本就是内联 `<img>` 存在 `content_text` 里，`editorBlur()` 会把整个 CKEditor 的 `getData()` 写入块中）。封面取 `article.cover` → 正文首图 → 空，已是彩龙 CDN 的地址直接复用不重复转存。草稿编辑页为 `https://www.clzg.cn/iarticle?id=<tid>`。
+
 ### v2.1.7 (2026-09-22)
 
 - 🆕 新增淘江湖（淘宝社区 `jianghu.taobao.com/editor.html`）适配器。**注意：该平台没有服务端草稿接口**（编辑器里的「草稿」只是 `localStorage["bbs_publish"]` 的本地缓存），所以同步是**直接发布**、`draftOnly` 恒为 false，提交后进入平台审核。鉴权为淘宝账号 SSO（`.taobao.com` 的 `unb` cookie）；发布走淘宝 mtop（`mtop.taobao.bbs.edit.content.post`，`title` / `topicId` / `userInputTags` / `content` / `pattern=5` / `host` 字段与编辑器逐字段一致），为避免自己实现 `md5(token&t&appKey&data)` 签名与绕过安全 SDK，接口调用在 `jianghu.taobao.com` 标签页的 MAIN world 里通过页面自带的 `window.lib.mtop.request()` 发起（与 autohome / douyin 同款做法）。**必须选择发布板块**：适配器先拉 `mtop.taobao.bbs.topic.list.get`，用 `category` / `tags` 去匹配板块或子分类名，匹配不到则回退到站点通用板块（茶馆 → 闲唠八卦），并在结果 message 里回显所落板块。图片走 `stream-upload.taobao.com/api/upload.api?appkey=taojianghu_pic_upload`（multipart：`name` + `file`，返回 `img.alicdn.com` 地址），同样在页面上下文发起以对齐 Origin/Referer。标题受平台限制会截断到 50 字。（发布请求体已用抓包逐字段复验：`{"title":"<encodeURI>","topicId":123101,"userInputTags":"[]","content":"<encodeURI(JSON.stringify({title,content}))>","pattern":5,"host":"jianghu.taobao.com"}`；该请求还带 `bx-ua`/`bx-umidtoken`/`bx_et` 风控字段，故必须走页面 MAIN world。）
@@ -562,7 +567,7 @@ pnpm build
 
 **Q: 支持同步微信公众号文章吗？**
 
-支持。可以直接从微信公众号编辑器提取文章，一键同步到知乎、头条、掘金等 34+ 平台。支持公众号文章同步到头条号、公众号同步到知乎、微信文章同步到掘金等各种场景。
+支持。可以直接从微信公众号编辑器提取文章，一键同步到知乎、头条、掘金等 36+ 平台。支持公众号文章同步到头条号、公众号同步到知乎、微信文章同步到掘金等各种场景。
 
 **Q: 支持 AI 写作工具吗？**
 

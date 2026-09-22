@@ -90,6 +90,17 @@ const ADAPTERS = [
       ' */',
     ],
   },
+  {
+    className: 'CailongAdapter',
+    srcFile: path.join(SRC_DIR, 'adapters', 'platforms', 'cailong.ts'),
+    doc: [
+      '/**',
+      ' * 彩龙社区（昆明信息港社区，www.clzg.cn）适配器',
+      ' *',
+      ' * @see ./cailong 源文件查看完整实现与 API 说明',
+      ' */',
+    ],
+  },
 ]
 
 /**
