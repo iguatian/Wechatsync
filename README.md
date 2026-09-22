@@ -83,6 +83,7 @@
 | 潮新闻（潮鸣号-浙江） | tidenews | 通用 | ✅ 🆕 |
 | 淘江湖（淘宝社区） | jianghu | 内容社区 | ✅ 🆕 |
 | 彩龙社区（昆明信息港） | cailong | 内容社区 | ✅ 🆕 |
+| 观察者网风闻 | guancha | 内容社区 | ✅ 🆕 |
 | 什么值得买 | smzdm | 通用 | ✅ |
 | 网易号 | netease | 通用 | ✅ |
 | 搜狐号 | sohu | 通用 | ✅ |
@@ -105,7 +106,8 @@ it之家只有移动端才能发布
 -->
 
 - [提交新平台请求](https://airtable.com/shrLSJMnTC2BlmP29)
-## weixin,zhihu,weibo,xiaohongshu,juejin,csdn,jianshu,toutiao,douyin,qq-content,bilibili,baijiahao,yuque,douban,sohu,xueqiu,woshipm,dayu,yidian,51cto,imooc,oschina,segmentfault,cnblogs,sohufocus,autohome,dongchedi,zol,jiemian,sspai,kuaichuan,tidenews,jianghu,x,eastmoney,smzdm,netease,wordpress,typecho,zip-download,zip-download
+## weixin,zhihu,weibo,xiaohongshu,juejin,csdn,jianshu,toutiao,douyin,qq-content,bilibili,baijiahao,yuque,douban,sohu,xueqiu,woshipm,dayu,yidian,51cto,imooc,oschina,segmentfault,cnblogs,sohufocus,autohome,dongchedi,zol,jiemian,sspai,kuaichuan,tidenews,jianghu,guancha,x,eastmoney,smzdm,netease,wordpress,typecho,zip-download,zip-download
+
 ### 双封面平台（懂车帝）
 
 懂车帝是典型的双封面平台：信息流推荐位用 **横版**（4:3），图文详情页用 **竖版**（3:4），两者必须分别上传，不能复用同一张图。**懂车帝会忽略通用的 `cover` 字段**，必须用专门的 `cover-horizontal` + `cover-vertical`。
@@ -464,6 +466,10 @@ pnpm build
 然后在 Chrome 中加载 `packages/extension/dist` 目录。
 
 ## 更新日志
+
+### v2.1.9 (2026-09-22)
+
+- 🆕 新增观察者网 · 风闻社区（`user.guancha.cn/post/publish.html`）适配器，支持同步为草稿。鉴权为**纯 Cookie**（站点前端 `mylib.checkLogin()` 的判据就是 cookie `GCZWU`，值形如 `<uid>-<encodeURI(用户名)>`，适配器直接从中解析 uid / 用户名，再调 `GET /user/get-user-tips` 补头像 —— 注意该接口**未登录时也返回 `code:0`**，只是 `avatar` 为空串，所以登录态只认 cookie）。图片走 `POST /image-upload/upload`（multipart，字段名 `upfile[]`，响应是**数组**，取第一项的 `data.downloadUrl`）。保存草稿走 `POST /post/publish-post-v2`（form-urlencoded）：`save_mode=draft` 存草稿 / `publish` 直接发布，**必须且只能带 1 个 `topic[]` 话题 id**（编辑器校验「至少选择1个标签」「最多可添加1个相关话题」），适配器用 `Article.tags` 匹配 `GET /topic/get-select-topic` 的话题名，匹配不到回退默认话题「广场」（topic_id=188，HAR 样本所选、站内发帖量最大的通用话题）。请求体与 HAR 逐字段一致（`original=0`、`access_device=1`、`vote_info=[]`，且**不传** `distribution_status` —— 编辑器里它是 `undefined`，jQuery 序列化时会跳过）。封面取 `article.cover`（站外先转存）→ 正文首图，统一提交**裸地址**（编辑器提交的是「裸地址 + `?imageMogr2/cut/...` 裁剪参数」，指向同一对象）。错误码透传：`code:203` = 未登录、`code:4` = 业务失败（如「您的账号正在审核中」）、`code:5` = 境外手机号需实名认证。
 
 ### v2.1.8 (2026-09-22)
 

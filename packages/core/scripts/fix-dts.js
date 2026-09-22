@@ -101,6 +101,17 @@ const ADAPTERS = [
       ' */',
     ],
   },
+  {
+    className: 'GuanchaAdapter',
+    srcFile: path.join(SRC_DIR, 'adapters', 'platforms', 'guancha.ts'),
+    doc: [
+      '/**',
+      ' * 观察者网 · 风闻社区（user.guancha.cn）适配器',
+      ' *',
+      ' * @see ./guancha 源文件查看完整实现与 API 说明',
+      ' */',
+    ],
+  },
 ]
 
 /**
