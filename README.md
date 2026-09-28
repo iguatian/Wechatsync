@@ -6,7 +6,7 @@
 
 **开源免费**的跨平台文章同步工具 | Chrome 浏览器扩展 | 自媒体内容分发神器
 
-一键同步微信公众号文章到知乎、头条、掘金、小红书、CSDN、腾讯内容开放平台、汽车之家、懂车帝、中关村在线、界面新闻、少数派、快传号、潮新闻 等 36+ 平台，支持 WordPress 等自建博客，告别重复复制粘贴。
+一键同步微信公众号文章到知乎、头条、掘金、小红书、CSDN、腾讯内容开放平台、汽车之家、懂车帝、中关村在线、界面新闻、少数派、快传号、潮新闻 等 38+ 平台，支持 WordPress 等自建博客，告别重复复制粘贴。
 
 > 🔥 支持 **Anthropic MCP 协议**，可在 Claude Desktop / Claude Code 中通过 AI 一键发布文章
 
@@ -49,7 +49,7 @@
 支持 Chrome / Edge / 360 / QQ 等 Chromium 内核浏览器
 
 
-## 支持 36+ 主流平台
+## 支持 38+ 主流平台
 
 | 平台 | ID | 类型 | 状态 |
 |-----|-----|-----|-----|
@@ -84,6 +84,7 @@
 | 淘江湖（淘宝社区） | jianghu | 内容社区 | ✅ 🆕 |
 | 彩龙社区（昆明信息港） | cailong | 内容社区 | ✅ 🆕 |
 | 观察者网风闻 | guancha | 内容社区 | ✅ 🆕 |
+| 大象号（大象新闻-河南） | dxh | 通用 | ✅ 🆕 |
 | 什么值得买 | smzdm | 通用 | ✅ |
 | 网易号 | netease | 通用 | ✅ |
 | 搜狐号 | sohu | 通用 | ✅ |
@@ -106,7 +107,7 @@ it之家只有移动端才能发布
 -->
 
 - [提交新平台请求](https://airtable.com/shrLSJMnTC2BlmP29)
-## weixin,zhihu,weibo,xiaohongshu,juejin,csdn,jianshu,toutiao,douyin,qq-content,bilibili,baijiahao,yuque,douban,sohu,xueqiu,woshipm,dayu,yidian,51cto,imooc,oschina,segmentfault,cnblogs,sohufocus,autohome,dongchedi,zol,jiemian,sspai,kuaichuan,tidenews,jianghu,guancha,x,eastmoney,smzdm,netease,wordpress,typecho,zip-download,zip-download
+## weixin,zhihu,weibo,xiaohongshu,juejin,csdn,jianshu,toutiao,douyin,qq-content,bilibili,baijiahao,yuque,douban,sohu,xueqiu,woshipm,dayu,yidian,51cto,imooc,oschina,segmentfault,cnblogs,sohufocus,autohome,dongchedi,zol,jiemian,sspai,kuaichuan,tidenews,jianghu,guancha,dxh,x,eastmoney,smzdm,netease,wordpress,typecho,zip-download,zip-download
 
 ### 双封面平台（懂车帝）
 
@@ -573,7 +574,7 @@ pnpm build
 
 **Q: 支持同步微信公众号文章吗？**
 
-支持。可以直接从微信公众号编辑器提取文章，一键同步到知乎、头条、掘金等 36+ 平台。支持公众号文章同步到头条号、公众号同步到知乎、微信文章同步到掘金等各种场景。
+支持。可以直接从微信公众号编辑器提取文章，一键同步到知乎、头条、掘金等 38+ 平台。支持公众号文章同步到头条号、公众号同步到知乎、微信文章同步到掘金等各种场景。
 
 **Q: 支持 AI 写作工具吗？**
 

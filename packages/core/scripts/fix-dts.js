@@ -112,6 +112,17 @@ const ADAPTERS = [
       ' */',
     ],
   },
+  {
+    className: 'DxhAdapter',
+    srcFile: path.join(SRC_DIR, 'adapters', 'platforms', 'dxh.ts'),
+    doc: [
+      '/**',
+      ' * 大象新闻 · 大象号（创作者后台，mp.hntv.tv）适配器',
+      ' *',
+      ' * @see ./dxh 源文件查看完整实现与 API 说明',
+      ' */',
+    ],
+  },
 ]
 
 /**
