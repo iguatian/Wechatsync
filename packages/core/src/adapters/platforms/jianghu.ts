@@ -34,10 +34,17 @@
  *    前端逻辑（jinghu editor bundle `p_editorIndex`）：
  *      - 板块有 subTopics → 提交 subTopics[n].topicId
  *      - 板块无 subTopics → 提交板块自身的 topicId
- *    板块结构（首页 SSR 可直接读到，层级为「板块 → 子分类」）：
- *      茶馆(121402) → 闲唠八卦(122401) / 热点聚焦(123101) / 生活游记(122501) / AI工具(123001) …
- *      黑板报(121401) / 淘宝教育(121403) / 种草笔记(123402) / 实用经验(122601) / 美食分享(123801) …
+ *    板块结构（`mtop.taobao.bbs.topic.list.get` 实测，层级为「板块 → 子分类」）：
+ *      茶馆(121402) → 闲唠八卦(122401) / 热点聚焦(123101) / 生活游记(122501) /
+ *                     AI工具(123001) / 视频专区(122901) / 话题PK(123901)
+ *      生意经(121403) → 淘宝教育(123601) / 淘宝问答(123301) / 聚财心法(122402) /
+ *                       江湖反馈(122403) / 资产拍卖(124201) / 平台规则(124301)
+ *      兴趣经验(123701) → 实用经验(122601) / 美食分享(123801) / 游戏交流(124001)
+ *      黑板报(121401)、种草笔记(123402)（`subTopics` 为空数组，直接提交板块自身 topicId）
  *    实测样本 `topicId=123101` 即「茶馆 → 热点聚焦」。
+ *
+ *    响应结构（已复验）：`{ ret: ["SUCCESS::调用成功"], data: { code: 200, message: "OK",
+ *      data: [{ topicId, topicName, subTopics: [{ topicId, topicName }] }] } }`
  *
  * 鉴权：
  *   **淘宝账号 SSO（Cookie）**。登录态体现在 `.taobao.com` 的用户号 cookie `unb`
@@ -78,13 +85,14 @@
  *   其中 content 解出来的内层样本：
  *     {"title":"标题…","content":"<p>内容…<img src=\"https://img.alicdn.com/...jpg\" width=\"700\" alt=\"标题…\">…</p>"}
  *   （即内层 title 与 content 都是**原始未编码**的，靠外层两次 encodeURI 传递。）
- *   → { ret: ["SUCCESS::调用成功"],
- *       data: { code: 200, data: { status, appId, postId } } }
- *     status: 2 = 发布成功；3 = 内容违规发布失败；其它 = 提交成功、进入审核
+ *   → { ret: ["SUCCESS::调用成功"], retType: 0, v: "1.0", traceId: "…",
+ *       data: { code: 200, message: "OK", data: { status, appId, postId } } }
+ *     status: 2 = 发布成功（实测）；3 = 内容违规发布失败；其它 = 提交成功、进入审核
  *     帖子地址：https://jianghu.taobao.com/detail/<appId>_<postId>
- *   ⚠️ 该 HAR 的响应体未导出（`response.content.text` 为 undefined，只留 size=215），
- *      所以响应结构来自编辑器产物（`I.data` → `{code, data:{status, appId, postId}}`），
- *      尚未用真实响应复验。
+ *   ✅ 已用真实响应复验（响应 `content-length: 215`，与 HAR 残留的 size=215 吻合）：
+ *      实测 `{ code: 200, message: "OK", data: { status: 2, appId: 47301, postId: 94356952 } }`，
+ *      帖子随即可通过详情页访问 —— 即下方 `body.data` / `result.postId` / `result.status`
+ *      的读取路径完全正确。仅 `status=3` 及其它取值仍是编辑器产物推断（发出后即删除，未留痕）。
  *
  * 其它相关接口（本适配器用到 / 备用）：
  *   mtop.taobao.bbs.topic.list.get   { host }           板块列表（含子分类）
@@ -131,7 +139,8 @@ const TITLE_MAX_LENGTH = 50
 /**
  * 兜底板块的优先顺序（当 `article.category` / `article.tags` 都没匹配上时使用）。
  *
- * 站点板块层级（首页 SSR 实测）：茶馆(121402) → 闲唠八卦(122401) / 热点聚焦(123101) / …
+ * 站点板块层级（`mtop.taobao.bbs.topic.list.get` 实测）：
+ * 茶馆(121402) → 闲唠八卦(122401) / 热点聚焦(123101) / …
  * 其中「闲唠八卦」是最通用的闲聊板，作为任意文章的默认落点比列表首个板块更稳妥。
  */
 const PREFERRED_TOPIC_NAMES = ['闲唠八卦', '茶馆']
