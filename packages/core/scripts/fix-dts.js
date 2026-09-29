@@ -123,6 +123,17 @@ const ADAPTERS = [
       ' */',
     ],
   },
+  {
+    className: 'HaibaoAdapter',
+    srcFile: path.join(SRC_DIR, 'adapters', 'platforms', 'haibao.ts'),
+    doc: [
+      '/**',
+      ' * 海报新闻 · 海报号（山东，创作者后台 mp.dzwww.com）适配器',
+      ' *',
+      ' * @see ./haibao 源文件查看完整实现与 API 说明',
+      ' */',
+    ],
+  },
 ]
 
 /**
