@@ -49,7 +49,7 @@
 支持 Chrome / Edge / 360 / QQ 等 Chromium 内核浏览器
 
 
-## 支持 39+ 主流平台
+## 支持 40+ 主流平台
 
 | 平台 | ID | 类型 | 状态 |
 |-----|-----|-----|-----|
@@ -86,6 +86,7 @@
 | 观察者网风闻 | guancha | 内容社区 | ✅ 🆕 |
 | 大象号（大象新闻-河南） | dxh | 通用 | ✅ 🆕 |
 | 海报号（海报新闻-山东） | haibao | 通用 | ✅ 🆕 |
+| AcFun | acfun | 内容社区 | ✅ 🆕 |
 | 什么值得买 | smzdm | 通用 | ✅ |
 | 网易号 | netease | 通用 | ✅ |
 | 搜狐号 | sohu | 通用 | ✅ |
@@ -108,7 +109,7 @@ it之家只有移动端才能发布
 -->
 
 - [提交新平台请求](https://airtable.com/shrLSJMnTC2BlmP29)
-## weixin,zhihu,weibo,xiaohongshu,juejin,csdn,jianshu,toutiao,douyin,qq-content,bilibili,baijiahao,yuque,douban,sohu,xueqiu,woshipm,dayu,yidian,51cto,imooc,oschina,segmentfault,cnblogs,sohufocus,autohome,dongchedi,zol,jiemian,sspai,kuaichuan,tidenews,jianghu,guancha,dxh,haibao,x,eastmoney,smzdm,netease,wordpress,typecho,zip-download,zip-download
+## weixin,zhihu,weibo,xiaohongshu,juejin,csdn,jianshu,toutiao,douyin,qq-content,bilibili,baijiahao,yuque,douban,sohu,xueqiu,woshipm,dayu,yidian,51cto,imooc,oschina,segmentfault,cnblogs,sohufocus,autohome,dongchedi,zol,jiemian,sspai,kuaichuan,tidenews,jianghu,guancha,dxh,haibao,acfun,x,eastmoney,smzdm,netease,wordpress,typecho,zip-download,zip-download
 
 ### 双封面平台（懂车帝）
 
@@ -468,6 +469,10 @@ pnpm build
 然后在 Chrome 中加载 `packages/extension/dist` 目录。
 
 ## 更新日志
+
+### v2.2.0 (2026-10-09)
+
+- 🆕 新增 AcFun（`member.acfun.cn/post-article`）适配器，**直接发布**（平台无草稿接口对接，`draftOnly` 恒为 false，编辑地址为 `https://member.acfun.cn/edit-article/{articleId}`，文章地址 `https://www.acfun.cn/a/ac{articleId}`）。鉴权走 `GET https://www.acfun.cn/rest/pc-direct/user/personalInfo`，异常时回退检测 `.acfun.cn` 的 `acPasstoken` cookie。图片走快手 KCE 通道四步：`POST /common/api/getQiniuToken`（JSON `{"fileName":"o_xxx.<ext>"}`）取 upload_token → `GET upload.kuaishouzt.com/api/upload/resume` → `POST /api/upload/fragment?fragment_id=0`（**原始二进制 body**，需 `Content-Type: application/octet-stream` + `Content-Range: bytes 0-N-1/N` 头）→ `POST /api/upload/complete?fragment_count=1`，最后 `POST /common/api/getUrlAfterUpload`（`bizFlag=web-article-cover`，HAR 实测值，正文图与封面共用）换取 `preview.ndcyx.com` 最终地址。发布走 `POST /article/api/postArticle`（form-urlencoded）：`detail` 为 JSON `{"bodyList":[{orderId:1,title:"",txt:encodeURIComponent(html)}]}`（注意 `txt` 是**二次编码**的 HTML），`tagNames` 为 JSON 数组，`creationType=3`，频道参数取抓包默认值 `channelId=110`、`realmId=4`、`supportZtEmot=true`；封面取 `article.cover`（站外图先转存，失败不阻断发布）。member 域与 kuaishouzt 域请求通过 DNR 规则补 `Origin/Referer`。
 
 ### v2.1.9 (2026-09-22)
 

@@ -43,5 +43,6 @@ export { CailongAdapter } from './cailong'
 export { GuanchaAdapter } from './guancha'
 export { DxhAdapter } from './dxh'
 export { HaibaoAdapter } from './haibao'
+export { AcfunAdapter } from './acfun'
 // FIXME: 适配器文件尚未实现，临时注释以通过构建
 // export { XAdapter } from './x'
