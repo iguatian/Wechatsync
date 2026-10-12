@@ -69,6 +69,7 @@ import {
   // 上游新闻适配器暂时下线，后续再放开
   // CqcbAdapter,
   OfweekAdapter,
+  HrttAdapter,
   // FIXME: 适配器文件尚未实现，临时注释以通过构建
   // XAdapter,
 } from '@wechatsync/core'
@@ -151,6 +152,7 @@ const ADAPTER_CLASSES: AdapterConstructor[] = [
   // 上游新闻适配器暂时下线，后续再放开
   // CqcbAdapter,
   OfweekAdapter,
+  HrttAdapter,
   // FIXME: 适配器文件尚未实现，临时注释以通过构建
   // XAdapter,
   ...getPrivateAdapters(),

@@ -47,5 +47,6 @@ export { AcfunAdapter } from './acfun'
 // 上游新闻适配器暂时下线，后续再放开
 // export { CqcbAdapter } from './cqcb'
 export { OfweekAdapter } from './ofweek'
+export { HrttAdapter } from './hrtt'
 // FIXME: 适配器文件尚未实现，临时注释以通过构建
 // export { XAdapter } from './x'
