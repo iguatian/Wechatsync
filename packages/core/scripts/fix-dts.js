@@ -134,6 +134,17 @@ const ADAPTERS = [
       ' */',
     ],
   },
+  {
+    className: 'DigitalingAdapter',
+    srcFile: path.join(SRC_DIR, 'adapters', 'platforms', 'digitaling.ts'),
+    doc: [
+      '/**',
+      ' * 数英网（www.digitaling.com）适配器',
+      ' *',
+      ' * @see ./digitaling 源文件查看完整实现与 API 说明',
+      ' */',
+    ],
+  },
 ]
 
 /**

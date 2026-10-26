@@ -6,7 +6,7 @@
 
 **开源免费**的跨平台文章同步工具 | Chrome 浏览器扩展 | 自媒体内容分发神器
 
-一键同步微信公众号文章到知乎、头条、掘金、小红书、CSDN、腾讯内容开放平台、汽车之家、懂车帝、中关村在线、界面新闻、少数派、快传号、潮新闻、上游新闻、维科号 等 43+ 平台，支持 WordPress 等自建博客，告别重复复制粘贴。
+一键同步微信公众号文章到知乎、头条、掘金、小红书、CSDN、腾讯内容开放平台、汽车之家、懂车帝、中关村在线、界面新闻、少数派、快传号、潮新闻、上游新闻、维科号 等 44+ 平台，支持 WordPress 等自建博客，告别重复复制粘贴。
 
 > 🔥 支持 **Anthropic MCP 协议**，可在 Claude Desktop / Claude Code 中通过 AI 一键发布文章
 
@@ -49,7 +49,7 @@
 支持 Chrome / Edge / 360 / QQ 等 Chromium 内核浏览器
 
 
-## 支持 43+ 主流平台
+## 支持 44+ 主流平台
 
 | 平台 | ID | 类型 | 状态 |
 |-----|-----|-----|-----|
@@ -88,6 +88,7 @@
 | 海报号（海报新闻-山东） | haibao | 通用 | ✅ 🆕 |
 | AcFun | acfun | 内容社区 | ✅ 🆕 |
 | 维科号（OFweek） | ofweek | 行业媒体 | ✅ 🆕 |
+| 数英网 | digitaling | 内容社区 | ✅ 🆕 |
 | 华人号（华人头条） | hrtt | 新闻媒体 | ✅ 🆕 |
 | 读特·深圳号（读特自媒体开放平台） | dute | 新闻媒体 | ✅ 🆕 |
 | 什么值得买 | smzdm | 通用 | ✅ |
@@ -112,7 +113,7 @@ it之家只有移动端才能发布
 -->
 
 - [提交新平台请求](https://airtable.com/shrLSJMnTC2BlmP29)
-## weixin,zhihu,weibo,xiaohongshu,juejin,csdn,jianshu,toutiao,douyin,qq-content,bilibili,baijiahao,yuque,douban,sohu,xueqiu,woshipm,dayu,yidian,51cto,imooc,oschina,segmentfault,cnblogs,sohufocus,autohome,dongchedi,zol,jiemian,sspai,kuaichuan,tidenews,dute,jianghu,guancha,dxh,haibao,acfun,cqcb,ofweek,x,eastmoney,smzdm,netease,wordpress,typecho,zip-download,zip-download
+## weixin,zhihu,weibo,xiaohongshu,juejin,csdn,jianshu,toutiao,douyin,qq-content,bilibili,baijiahao,yuque,douban,sohu,xueqiu,woshipm,dayu,yidian,51cto,imooc,oschina,segmentfault,cnblogs,sohufocus,autohome,dongchedi,zol,jiemian,sspai,kuaichuan,tidenews,dute,jianghu,guancha,dxh,haibao,acfun,cqcb,ofweek,digitaling,x,eastmoney,smzdm,netease,wordpress,typecho,zip-download,zip-download
 
 ### 双封面平台（懂车帝）
 
@@ -473,6 +474,10 @@ pnpm build
 
 ## 更新日志
 
+### v2.2.2 (2026-10-26)
+
+- 🆕 新增数英网（`www.digitaling.com` 文章发布页 `/articles/publish`）适配器，支持同步为草稿（保存到「草稿箱」→ `https://www.digitaling.com/creator/draft`，提交审核由用户在后台完成）。鉴权与令牌全部来自**服务端渲染的发布页**：登录态看隐藏域 `loginUserId`（未登录会被 302 到首页），请求签名看 `openKey` + `signature` —— 这两个令牌每次打开发布页都会变，缺失时服务端直接回 `{"isSuccess":40}`，因此适配器每次发布前都重新抓一次发布页，不缓存。图片分两条通道：正文图走 UEditor 的 `POST /datas/ueupload?action=uploadimage`（字段 `upfile`，返回 `{state:"SUCCESS",url}`），封面走站点自有 `POST /datas/eupload?dir=cover`（字段 `imgFile`，返回 `{error:0,url,w,h}`，建议 640×400）。发布走 `POST /datasv2/articlePub`（form-urlencoded + jQuery 深度序列化 `datas[...]`）：`datas[source]=1` 固定原创（转载需上传授权证明、译文需原文链接，不适合自动同步），`datas[postType]` 0=草稿 / 1=提交发布，关键词走 `tags` + `hideWords` + `akIds` 三件套（手输词 akid 记 0）。标题按站点 `countHtmlChars` 口径（ASCII 0.5 / 非 ASCII 1）截断到 30，摘要 60，关键词最多 8 个；`isSuccess` 3=可发布数用完、100=敏感词（回填命中上下文）、101=业务提示，均原样透传。
+
 ### v2.2.1 (2026-10-13)
 
 - 🆕 新增读特·深圳号（深圳报业集团「读特自媒体开放平台」PUGC 投稿平台 `batman-szby.szpgm.cn`）适配器，支持同步为草稿（保存到「作品管理」列表，提交审核由用户在后台完成）。该平台鉴权体系较重，适配器完整复刻了前端链路：① 请求统一带 `s-token`（localStorage `loginInfo.authToken`）+ `source: batman` + `Ticket`（SM2 C1C2C3 加密 `{token, secret, timestamp}`，服务器公钥与 secret 均为前端内置常量）；② 安全 token 存在 sessionStorage `PUGC.TOKEN_DATA`，页面缺失时适配器可自行调用 `GET /prebatman/batman/security/token` 获取（type/key/secret/publicKey 四个参数全部 SM2 加密，响应用随请求的临时公钥解密）；③ 几乎所有接口都要带 `dn` 参数（randomUUID 去 `-` + 时间戳后 5 位）。发布流程：账号信息 `getSubmissionPlatformAccountByUserId` → `wemedia/init` 建稿 → `article/uploadImage`（multipart：`file` + `dn`）→ `wemedia/save`，正文图片统一使用上传返回的设备路径 `qBp-block;*.png`（`src`/`mam` 同值，服务端读取时经 `getImageUrl` 换回真实地址）。站内跳转链接的 `akt` 参数已逆向并复刻（SM4-ECB 加密 query 串，密钥 = `(userCode + userID)` 补位到 32 位，round-trip 与站内生成密文逐字节一致），发布结果的 `postUrl` 为带 `akt` 的作品管理深链。注意：该平台登录页必须带 `siteId=1`，否则提示「站点id不能为空」。
@@ -587,7 +592,7 @@ pnpm build
 
 **Q: 支持同步微信公众号文章吗？**
 
-支持。可以直接从微信公众号编辑器提取文章，一键同步到知乎、头条、掘金等 43+ 平台。支持公众号文章同步到头条号、公众号同步到知乎、微信文章同步到掘金等各种场景。
+支持。可以直接从微信公众号编辑器提取文章，一键同步到知乎、头条、掘金等 44+ 平台。支持公众号文章同步到头条号、公众号同步到知乎、微信文章同步到掘金等各种场景。
 
 **Q: 支持 AI 写作工具吗？**
 

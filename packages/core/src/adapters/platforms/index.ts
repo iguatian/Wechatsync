@@ -49,5 +49,6 @@ export { AcfunAdapter } from './acfun'
 // export { CqcbAdapter } from './cqcb'
 export { OfweekAdapter } from './ofweek'
 export { HrttAdapter } from './hrtt'
+export { DigitalingAdapter } from './digitaling'
 // FIXME: 适配器文件尚未实现，临时注释以通过构建
 // export { XAdapter } from './x'
