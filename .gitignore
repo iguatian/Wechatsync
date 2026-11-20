@@ -35,4 +35,3 @@ CLAUDE.md
 # Private adapters (not open source)
 packages/core/src/adapters/platforms/x.ts
 packages/core/src/content/
-packages/extension/src/content/xiaohongshu.ts
