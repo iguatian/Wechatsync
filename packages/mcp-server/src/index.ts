@@ -387,6 +387,7 @@ async function startSSEMode() {
     res.json({
       status: 'ok',
       extensionConnected: bridge.isConnected(),
+      instances: bridge.listInstances(),
     })
   })
 
@@ -395,6 +396,7 @@ async function startSSEMode() {
       name: 'Sync Assistant MCP Server',
       version: '1.0.0',
       extensionConnected: bridge.isConnected(),
+      instances: bridge.listInstances(),
     })
   })
 

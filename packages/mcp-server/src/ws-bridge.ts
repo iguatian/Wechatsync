@@ -19,6 +19,17 @@ export class ExtensionBridge {
   private httpServers: Map<number, http.Server> = new Map()
   private clients: Map<number, any> = new Map()
   private clientIps: Map<number, string> = new Map()
+  /**
+   * 实例名 -> 连接（单端口多实例模式）
+   * 扩展连接地址带 ?instance=pc1 时登记到此处，HTTP 侧可用 /request?instance=pc1 精确路由。
+   * 未带 instance 的连接只进 clients（按端口），保持旧行为。
+   */
+  private instances: Map<string, {
+    ws: any
+    port: number
+    ip: string
+    connectedAt: number
+  }> = new Map()
   private isServerMode = false
   private pendingRequests = new Map<string, {
     resolve: (value: unknown) => void
@@ -143,8 +154,8 @@ export class ExtensionBridge {
           this.startHttpApi(wsPort).then(resolve).catch(reject)
         })
 
-        wss.on('connection', (ws: any) => {
-          this.onConnection(wsPort, ws)
+        wss.on('connection', (ws: any, req: any) => {
+          this.onConnection(wsPort, ws, req)
         })
 
         wss.on('error', (error: Error) => {
@@ -159,12 +170,31 @@ export class ExtensionBridge {
   /**
    * 处理扩展连接（记录 IP，按端口维护 client）
    */
-  private onConnection(wsPort: number, ws: any): void {
+  private onConnection(wsPort: number, ws: any, req?: any): void {
     const ip = (ws._socket && ws._socket.remoteAddress) || 'unknown'
+    const instanceId = this.parseInstanceId(req)
+
     this.clients.set(wsPort, ws)
     this.clientIps.set(wsPort, ip)
     this.isAliveFlags.set(wsPort, true)
-    if (!this.silent) console.error(`[Bridge] Extension connected on port ${wsPort} (IP: ${ip})`)
+    if (!this.silent) {
+      const suffix = instanceId ? `, instance="${instanceId}"` : ''
+      console.error(`[Bridge] Extension connected on port ${wsPort} (IP: ${ip}${suffix})`)
+    }
+
+    // 单端口多实例：同名实例重连时顶掉旧连接
+    if (instanceId) {
+      const previous = this.instances.get(instanceId)
+      if (previous && previous.ws !== ws) {
+        if (!this.silent) console.error(`[Bridge] Instance "${instanceId}" reconnected, closing previous connection`)
+        try {
+          previous.ws.close(4000, 'replaced by new connection')
+        } catch {
+          // 忽略关闭失败
+        }
+      }
+      this.instances.set(instanceId, { ws, port: wsPort, ip, connectedAt: Date.now() })
+    }
 
     // 通知等待连接的 Promise（按端口分组）
     const resolvers = this.connectionResolvers.get(wsPort) || []
@@ -184,9 +214,18 @@ export class ExtensionBridge {
 
     ws.on('close', () => {
       if (!this.silent) console.error(`[Bridge] Extension disconnected from port ${wsPort}`)
-      this.clients.delete(wsPort)
-      this.clientIps.delete(wsPort)
-      this.isAliveFlags.delete(wsPort)
+      // 仅当映射仍指向这条连接时才清理，避免重连时误删新连接
+      if (this.clients.get(wsPort) === ws) {
+        this.clients.delete(wsPort)
+        this.clientIps.delete(wsPort)
+        this.isAliveFlags.delete(wsPort)
+      }
+      if (instanceId) {
+        const current = this.instances.get(instanceId)
+        if (current && current.ws === ws) {
+          this.instances.delete(instanceId)
+        }
+      }
     })
 
     ws.on('error', (error: Error) => {
@@ -195,6 +234,50 @@ export class ExtensionBridge {
 
     // 启动全局心跳定时器（所有端口共用，避免重复创建）
     this.ensureHeartbeat()
+  }
+
+  /**
+   * 从 WebSocket upgrade 请求中解析实例名（?instance=pc1）
+   */
+  private parseInstanceId(req?: any): string | null {
+    if (!req || typeof req.url !== 'string' || !req.url) return null
+    try {
+      const parsed = new URL(req.url, 'http://localhost')
+      const raw = parsed.searchParams.get('instance')
+      if (!raw) return null
+      // 仅允许字母数字、下划线、短横线，长度 1~64，避免注入奇怪字符
+      const cleaned = raw.trim().replace(/[^a-zA-Z0-9_-]/g, '')
+      if (!cleaned) return null
+      return cleaned.slice(0, 64)
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * 指定实例是否在线
+   */
+  isInstanceConnected(instanceId: string): boolean {
+    if (!this.isServerMode) return false
+    const conn = this.instances.get(instanceId)
+    return !!conn && conn.ws.readyState === WS_OPEN
+  }
+
+  /**
+   * 列出所有登记了实例名的在线连接
+   */
+  listInstances(): Array<{ id: string; port: number; ip: string; connectedAt: number; connected: boolean }> {
+    const result: Array<{ id: string; port: number; ip: string; connectedAt: number; connected: boolean }> = []
+    for (const [id, conn] of this.instances) {
+      result.push({
+        id,
+        port: conn.port,
+        ip: conn.ip,
+        connectedAt: conn.connectedAt,
+        connected: conn.ws.readyState === WS_OPEN,
+      })
+    }
+    return result.sort((a, b) => a.id.localeCompare(b.id))
   }
 
   /**
@@ -254,7 +337,12 @@ export class ExtensionBridge {
           return
         }
 
-        if (req.method === 'GET' && req.url === '/status') {
+        const requestUrl = new URL(req.url || '/', 'http://localhost')
+        const pathname = requestUrl.pathname
+        // 单端口多实例：?instance=pc1 时按实例名路由，缺省仍按端口路由（向后兼容）
+        const instanceId = requestUrl.searchParams.get('instance')
+
+        if (req.method === 'GET' && pathname === '/status') {
           res.writeHead(200, { 'Content-Type': 'application/json' })
           res.end(JSON.stringify({
             connected: this.isConnected(wsPortToTrack),
@@ -264,24 +352,36 @@ export class ExtensionBridge {
             clientIp: this.clientIps.get(wsPortToTrack) || null,
             // 诊断信息：token 是否已配置（不暴露 token 本身）
             tokenConfigured: !!this.token,
+            instances: this.listInstances(),
           }))
           return
         }
 
-        if (req.method === 'POST' && req.url === '/request') {
+        if (req.method === 'GET' && pathname === '/instances') {
+          res.writeHead(200, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ instances: this.listInstances() }))
+          return
+        }
+
+        if (req.method === 'POST' && pathname === '/request') {
           let body = ''
           req.on('data', chunk => body += chunk)
           req.on('end', async () => {
             try {
               const { method, params } = JSON.parse(body)
-              const result = await this.requestInternal(wsPortToTrack, method, params)
+              const result = instanceId
+                ? await this.requestInternalByInstance(instanceId, method, params)
+                : await this.requestInternal(wsPortToTrack, method, params)
               res.writeHead(200, { 'Content-Type': 'application/json' })
-              res.end(JSON.stringify({ result }))
+              res.end(JSON.stringify({ result, instance: instanceId || null }))
             } catch (error) {
-              const message = (error as Error).message
+              const err = error as Error & { code?: string }
+              const message = err.message
               // 区分错误类型，返回正确的 HTTP 状态码，便于上层诊断
               let statusCode = 500
-              if (message.includes('Invalid or missing token') || message.includes('MCP token not configured')) {
+              if (err.code === 'INSTANCE_NOT_CONNECTED') {
+                statusCode = 404
+              } else if (message.includes('Invalid or missing token') || message.includes('MCP token not configured')) {
                 statusCode = 401
               } else if (message.includes('Extension not connected')) {
                 statusCode = 503
@@ -324,6 +424,10 @@ export class ExtensionBridge {
     }
     this.clients.delete(wsPort)
     this.clientIps.delete(wsPort)
+    // 清理该端口上登记的实例
+    for (const [id, conn] of [...this.instances]) {
+      if (conn.port === wsPort) this.instances.delete(id)
+    }
   }
 
   /**
@@ -338,6 +442,7 @@ export class ExtensionBridge {
     this.pendingRequests.clear()
     this.connectionResolvers.clear()
     this.isAliveFlags.clear()
+    this.instances.clear()
     // 清理心跳定时器
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer)
@@ -628,7 +733,37 @@ export class ExtensionBridge {
     if (!client || client.readyState !== WS_OPEN) {
       throw new Error(`Extension not connected on port ${wsPort}. Please ensure the Chrome extension is running.`)
     }
+    return this.sendRequest<T>(client, method, params)
+  }
 
+  /**
+   * 按实例名发送请求（单端口多实例模式）
+   */
+  private async requestInternalByInstance<T = unknown>(
+    instanceId: string,
+    method: string,
+    params?: Record<string, unknown>
+  ): Promise<T> {
+    const conn = this.instances.get(instanceId)
+    if (!conn || conn.ws.readyState !== WS_OPEN) {
+      const error = new Error(
+        `Extension not connected for instance "${instanceId}". ` +
+        `Please make sure the extension is online with ?instance=${instanceId}`
+      )
+      ;(error as Error & { code?: string }).code = 'INSTANCE_NOT_CONNECTED'
+      throw error
+    }
+    return this.sendRequest<T>(conn.ws, method, params)
+  }
+
+  /**
+   * 通过指定连接发送请求（统一 token 校验、超时与 pending 管理）
+   */
+  private async sendRequest<T = unknown>(
+    client: any,
+    method: string,
+    params?: Record<string, unknown>
+  ): Promise<T> {
     // 服务端未配置 token 时提前报错，避免让扩展返回模糊的 "Invalid or missing token"
     if (!this.token) {
       throw new Error(
