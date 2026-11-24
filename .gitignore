@@ -21,6 +21,8 @@ packages/*/src/**/*.js
 packages/*/src/**/*.js.map
 packages/*/src/**/*.d.ts
 packages/*/src/**/*.d.ts.map
+# 手写的模块声明不能忽略（dute.ts 通过 reference path 引用）
+!packages/core/src/adapters/platforms/sm-crypto.d.ts
 *.tsbuildinfo
 
 # Keep reader library files
